@@ -1,0 +1,32 @@
+# BalanceLog Pro - Dependencies
+# Production-grade balancing record digitization
+
+# UI Framework
+PySide6>=6.7.0
+
+# Computer Vision
+opencv-python-headless>=4.9.0
+numpy>=1.26.0
+
+# OCR Engines
+easyocr>=1.7.0
+pytesseract>=0.3.10
+
+# Screen Capture
+mss>=9.0.0
+
+# Windows API
+pywin32>=306
+
+# Data & Export
+pandas>=2.2.0
+openpyxl>=3.1.0
+
+# PDF Reports
+reportlab>=4.1.0
+
+# Image Processing
+Pillow>=10.2.0
+
+# Build
+pyinstaller>=6.3.0
