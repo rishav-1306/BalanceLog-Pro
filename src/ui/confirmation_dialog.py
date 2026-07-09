@@ -7,7 +7,7 @@ the screenshot, allowing the operator to confirm, edit, or reject.
 
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel,
-    QPushButton, QLineEdit, QFrame,
+    QPushButton, QLineEdit, QFrame, QComboBox,
 )
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QFont, QColor, QPixmap
@@ -16,6 +16,9 @@ from src.config.constants import Colors, Fonts
 from src.database.models import BalancingRecord
 from src.ocr.ocr_result import ExtractionSummary
 from src.ui.widgets import ImageViewer
+from src.utils.logger import get_logger
+
+logger = get_logger("ui")
 
 
 class ConfirmationDialog(QDialog):
@@ -84,17 +87,19 @@ class ConfirmationDialog(QDialog):
         grid.setSpacing(8)
 
         fields = [
-            ("punching_number", "Punching Number", self._record.punching_number),
-            ("tube_length", "Tube Length (mm)", str(self._record.tube_length)),
+            ("rotor_no", "Rotor Number", self._record.rotor_no),
+            ("actual_rpm", "Actual RPM", str(self._record.actual_rpm)),
             ("shaft_type", "Type", self._record.shaft_type),
-            ("initial_left_value", "Initial Left", str(self._record.initial_left_value)),
-            ("initial_left_angle", "Init Left Angle", str(self._record.initial_left_angle)),
-            ("initial_right_value", "Initial Right", str(self._record.initial_right_value)),
-            ("initial_right_angle", "Init Right Angle", str(self._record.initial_right_angle)),
-            ("weight_addition_left", "Weight Add. Left", str(self._record.weight_addition_left)),
-            ("weight_addition_right", "Weight Add. Right", str(self._record.weight_addition_right)),
-            ("after_correction_left", "After Corr. Left", str(self._record.after_correction_left)),
-            ("after_correction_right", "After Corr. Right", str(self._record.after_correction_right)),
+            ("initial_left_value", "Initial Left (gm)", str(self._record.initial_left_value)),
+            ("initial_left_angle", "Init Left Angle (°)", str(self._record.initial_left_angle)),
+            ("initial_right_value", "Initial Right (gm)", str(self._record.initial_right_value)),
+            ("initial_right_angle", "Init Right Angle (°)", str(self._record.initial_right_angle)),
+            ("weight_addition_left", "Wt Add Left (gm)", str(self._record.weight_addition_left)),
+            ("weight_addition_right", "Wt Add Right (gm)", str(self._record.weight_addition_right)),
+            ("after_correction_left", "Corrected Left (gm)", str(self._record.after_correction_left)),
+            ("after_correction_left_angle", "Corr Left Angle (°)", str(self._record.after_correction_left_angle)),
+            ("after_correction_right", "Corrected Right (gm)", str(self._record.after_correction_right)),
+            ("after_correction_right_angle", "Corr Right Angle (°)", str(self._record.after_correction_right_angle)),
         ]
 
         for row, (field_name, label_text, value) in enumerate(fields):
@@ -114,14 +119,29 @@ class ConfirmationDialog(QDialog):
             lbl.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; background: transparent;")
             grid.addWidget(lbl, row, 0)
 
-            inp = QLineEdit(value)
-            if confidence < 0.75:
-                inp.setStyleSheet(f"""
-                    QLineEdit {{
-                        border-color: {Colors.ERROR};
-                        background-color: rgba(229, 57, 53, 0.1);
-                    }}
-                """)
+            if field_name in ("weight_addition_left", "weight_addition_right"):
+                inp = QComboBox()
+                inp.addItems(["0", "10", "20", "30", "40", "50"])
+                try:
+                    val_float = float(value or 0)
+                    val_str = str(int(val_float))
+                except ValueError:
+                    val_str = "0"
+                idx = inp.findText(val_str)
+                if idx >= 0:
+                    inp.setCurrentIndex(idx)
+                else:
+                    inp.addItem(val_str)
+                    inp.setCurrentIndex(inp.count() - 1)
+            else:
+                inp = QLineEdit(value)
+                if confidence < 0.75:
+                    inp.setStyleSheet(f"""
+                        QLineEdit {{
+                            border-color: {Colors.ERROR};
+                            background-color: rgba(229, 57, 53, 0.1);
+                        }}
+                    """)
             self._field_inputs[field_name] = inp
             grid.addWidget(inp, row, 1)
 
@@ -165,19 +185,22 @@ class ConfirmationDialog(QDialog):
         """Apply any edits and emit confirmed signal."""
         # Update record with potentially edited values
         try:
-            self._record.punching_number = self._field_inputs["punching_number"].text()
-            self._record.tube_length = float(self._field_inputs["tube_length"].text() or 0)
+            self._record.rotor_no = self._field_inputs["rotor_no"].text()
+            self._record.punching_number = self._record.rotor_no  # Sync legacy property
+            self._record.actual_rpm = float(self._field_inputs["actual_rpm"].text() or 0)
             self._record.shaft_type = self._field_inputs["shaft_type"].text()
             self._record.initial_left_value = float(self._field_inputs["initial_left_value"].text() or 0)
             self._record.initial_left_angle = float(self._field_inputs["initial_left_angle"].text() or 0)
             self._record.initial_right_value = float(self._field_inputs["initial_right_value"].text() or 0)
             self._record.initial_right_angle = float(self._field_inputs["initial_right_angle"].text() or 0)
-            self._record.weight_addition_left = float(self._field_inputs["weight_addition_left"].text() or 0)
-            self._record.weight_addition_right = float(self._field_inputs["weight_addition_right"].text() or 0)
+            self._record.weight_addition_left = float(self._field_inputs["weight_addition_left"].currentText() or 0)
+            self._record.weight_addition_right = float(self._field_inputs["weight_addition_right"].currentText() or 0)
             self._record.after_correction_left = float(self._field_inputs["after_correction_left"].text() or 0)
+            self._record.after_correction_left_angle = float(self._field_inputs["after_correction_left_angle"].text() or 0)
             self._record.after_correction_right = float(self._field_inputs["after_correction_right"].text() or 0)
-        except ValueError:
-            pass
+            self._record.after_correction_right_angle = float(self._field_inputs["after_correction_right_angle"].text() or 0)
+        except (ValueError, KeyError) as e:
+            logger.error("Error saving edits in confirmation dialog: %s", e)
 
         self.confirmed.emit(self._record)
         self.accept()

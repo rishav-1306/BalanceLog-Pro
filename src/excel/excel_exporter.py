@@ -27,20 +27,19 @@ logger = get_logger("excel")
 COLUMNS = [
     ("Date", "date", 14, None),
     ("Time", "time", 12, None),
-    ("Punching Number", "punching_number", 20, None),
-    ("Tube Length (mm)", "tube_length", 16, "0.0"),
+    ("Rotor Number", "rotor_no", 20, None),
+    ("Actual RPM", "actual_rpm", 12, "0"),
     ("Type", "shaft_type", 10, None),
-    ("Initial 0°", "initial_zero_degree", 12, "0.00"),
-    ("Initial Left", "initial_left_value", 14, "0.00"),
-    ("Initial Left Angle", "initial_left_angle", 16, "0.0"),
-    ("Initial Right", "initial_right_value", 14, "0.00"),
-    ("Initial Right Angle", "initial_right_angle", 16, "0.0"),
-    ("Weight Add. Left", "weight_addition_left", 16, "0.00"),
-    ("Weight Add. Right", "weight_addition_right", 16, "0.00"),
-    ("After Corr. 0°", "after_correction_zero_degree", 14, "0.00"),
-    ("After Corr. Left", "after_correction_left", 16, "0.00"),
-    ("After Corr. Right", "after_correction_right", 16, "0.00"),
-    ("Screenshot", "screenshot_path", 30, None),
+    ("Initial Left (gm)", "initial_left_value", 16, "0.00"),
+    ("Initial Left Angle (°)", "initial_left_angle", 18, "0.0"),
+    ("Initial Right (gm)", "initial_right_value", 16, "0.00"),
+    ("Initial Right Angle (°)", "initial_right_angle", 18, "0.0"),
+    ("Corrected Left (gm)", "after_correction_left", 18, "0.00"),
+    ("Corrected Left Angle (°)", "after_correction_left_angle", 22, "0.0"),
+    ("Corrected Right (gm)", "after_correction_right", 18, "0.00"),
+    ("Corrected Right Angle (°)", "after_correction_right_angle", 22, "0.0"),
+    ("Initial Screenshot", "initial_screenshot_path", 30, None),
+    ("Correction Screenshot", "correction_screenshot_path", 30, None),
     ("OCR Confidence", "ocr_confidence", 16, "0.0%"),
     ("Notes", "operator_notes", 25, None),
 ]
@@ -214,7 +213,7 @@ class ExcelExporter:
                     cell.number_format = num_format
 
                 # Screenshot column: add hyperlink
-                if field_name == "screenshot_path" and value:
+                if field_name in ("screenshot_path", "initial_screenshot_path", "correction_screenshot_path") and value:
                     try:
                         cell.hyperlink = str(Path(value).as_uri())
                         cell.font = Font(

@@ -54,8 +54,10 @@ class DatabaseManager:
     # ─────────────────────────────────────────────────────────
     # Schema
     # ─────────────────────────────────────────────────────────
+    CURRENT_SCHEMA_VERSION = 3
+
     def init_db(self) -> None:
-        """Create tables and indexes if they don't exist."""
+        """Create tables and indexes if they don't exist, and run migrations."""
         conn = self._get_connection()
         conn.executescript("""
             CREATE TABLE IF NOT EXISTS balancing_records (
@@ -98,11 +100,60 @@ class DatabaseManager:
                 version INTEGER PRIMARY KEY
             );
         """)
-        # Insert schema version if not present
+        # Check schema version and migrate if needed
         row = conn.execute("SELECT version FROM schema_version LIMIT 1").fetchone()
         if row is None:
+            # brand new database or legacy database without schema_version:
+            # start version at 1, then migrate
             conn.execute("INSERT INTO schema_version (version) VALUES (?)", (1,))
+            self._migrate_schema(conn, 1)
+        elif row[0] < self.CURRENT_SCHEMA_VERSION:
+            self._migrate_schema(conn, row[0])
         conn.commit()
+
+    def _migrate_schema(self, conn: sqlite3.Connection, from_version: int) -> None:
+        """Run incremental schema migrations."""
+        if from_version < 2:
+            # Migration v1 → v2: Add new columns
+            new_columns = [
+                ("rotor_no", "TEXT NOT NULL DEFAULT ''"),
+                ("actual_rpm", "REAL NOT NULL DEFAULT 0.0"),
+                ("after_correction_left_angle", "REAL NOT NULL DEFAULT 0.0"),
+                ("after_correction_right_angle", "REAL NOT NULL DEFAULT 0.0"),
+                ("initial_screenshot_path", "TEXT NOT NULL DEFAULT ''"),
+                ("correction_screenshot_path", "TEXT NOT NULL DEFAULT ''"),
+            ]
+            for col_name, col_def in new_columns:
+                try:
+                    conn.execute(
+                        f"ALTER TABLE balancing_records ADD COLUMN {col_name} {col_def}"
+                    )
+                except sqlite3.OperationalError:
+                    pass  # Column already exists
+
+            # Create new index
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_rotor_no ON balancing_records(rotor_no)"
+            )
+
+        if from_version < 3:
+            # Migration v2 → v3: Add daily_seq column
+            try:
+                conn.execute(
+                    "ALTER TABLE balancing_records ADD COLUMN daily_seq INTEGER NOT NULL DEFAULT 0"
+                )
+            except sqlite3.OperationalError:
+                pass  # Column already exists
+
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_daily_seq ON balancing_records(daily_seq)"
+            )
+
+        # Update schema version to current
+        conn.execute(
+            "UPDATE schema_version SET version = ?",
+            (self.CURRENT_SCHEMA_VERSION,),
+        )
 
     # ─────────────────────────────────────────────────────────
     # Insert
@@ -116,28 +167,41 @@ class DatabaseManager:
 
         conn = self._get_connection()
         with self._lock:
+            # Calculate daily sequence number if not set
+            if not record.daily_seq:
+                row = conn.execute(
+                    "SELECT COUNT(*) FROM balancing_records WHERE date=?", (record.date,)
+                ).fetchone()
+                record.daily_seq = (row[0] if row else 0) + 1
+
             cursor = conn.execute("""
                 INSERT INTO balancing_records (
-                    date, time, punching_number, tube_length, shaft_type,
+                    date, time, punching_number, rotor_no, daily_seq,
+                    tube_length, shaft_type, actual_rpm,
                     initial_zero_degree, initial_left_value, initial_left_angle,
                     initial_right_value, initial_right_angle,
                     weight_addition_left, weight_addition_right,
-                    after_correction_zero_degree, after_correction_left,
-                    after_correction_right,
-                    screenshot_path, ocr_confidence, operator_notes,
+                    after_correction_zero_degree,
+                    after_correction_left, after_correction_left_angle,
+                    after_correction_right, after_correction_right_angle,
+                    screenshot_path, initial_screenshot_path, correction_screenshot_path,
+                    ocr_confidence, operator_notes,
                     created_at, updated_at, is_validated
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 record.date, record.time, record.punching_number,
-                record.tube_length, record.shaft_type,
+                record.rotor_no, record.daily_seq,
+                record.tube_length, record.shaft_type, record.actual_rpm,
                 record.initial_zero_degree, record.initial_left_value,
                 record.initial_left_angle, record.initial_right_value,
                 record.initial_right_angle,
                 record.weight_addition_left, record.weight_addition_right,
                 record.after_correction_zero_degree,
-                record.after_correction_left, record.after_correction_right,
-                record.screenshot_path, record.ocr_confidence,
-                record.operator_notes,
+                record.after_correction_left, record.after_correction_left_angle,
+                record.after_correction_right, record.after_correction_right_angle,
+                record.screenshot_path, record.initial_screenshot_path,
+                record.correction_screenshot_path,
+                record.ocr_confidence, record.operator_notes,
                 record.created_at, record.updated_at,
                 1 if record.is_validated else 0,
             ))
@@ -157,26 +221,34 @@ class DatabaseManager:
         with self._lock:
             conn.execute("""
                 UPDATE balancing_records SET
-                    date=?, time=?, punching_number=?, tube_length=?, shaft_type=?,
+                    date=?, time=?, punching_number=?, rotor_no=?, daily_seq=?,
+                    tube_length=?, shaft_type=?, actual_rpm=?,
                     initial_zero_degree=?, initial_left_value=?, initial_left_angle=?,
                     initial_right_value=?, initial_right_angle=?,
                     weight_addition_left=?, weight_addition_right=?,
-                    after_correction_zero_degree=?, after_correction_left=?,
-                    after_correction_right=?,
-                    screenshot_path=?, ocr_confidence=?, operator_notes=?,
+                    after_correction_zero_degree=?,
+                    after_correction_left=?, after_correction_left_angle=?,
+                    after_correction_right=?, after_correction_right_angle=?,
+                    screenshot_path=?, initial_screenshot_path=?,
+                    correction_screenshot_path=?,
+                    ocr_confidence=?, operator_notes=?,
                     updated_at=?, is_validated=?
                 WHERE id=?
             """, (
                 record.date, record.time, record.punching_number,
-                record.tube_length, record.shaft_type,
+                record.rotor_no, record.daily_seq,
+                record.tube_length, record.shaft_type, record.actual_rpm,
                 record.initial_zero_degree, record.initial_left_value,
                 record.initial_left_angle, record.initial_right_value,
                 record.initial_right_angle,
                 record.weight_addition_left, record.weight_addition_right,
                 record.after_correction_zero_degree,
-                record.after_correction_left, record.after_correction_right,
-                record.screenshot_path, record.ocr_confidence,
-                record.operator_notes, record.updated_at,
+                record.after_correction_left, record.after_correction_left_angle,
+                record.after_correction_right, record.after_correction_right_angle,
+                record.screenshot_path, record.initial_screenshot_path,
+                record.correction_screenshot_path,
+                record.ocr_confidence, record.operator_notes,
+                record.updated_at,
                 1 if record.is_validated else 0,
                 record.id,
             ))
@@ -231,8 +303,8 @@ class DatabaseManager:
         params: List = []
 
         if filters.punching_number:
-            conditions.append("punching_number LIKE ?")
-            params.append(f"%{filters.punching_number}%")
+            conditions.append("(punching_number LIKE ? OR rotor_no LIKE ?)")
+            params.extend([f"%{filters.punching_number}%", f"%{filters.punching_number}%"])
 
         if filters.date_from:
             conditions.append("date >= ?")
@@ -269,8 +341,8 @@ class DatabaseManager:
         where_clause = " AND ".join(conditions) if conditions else "1=1"
 
         # Validate order_by to prevent injection
-        allowed_order = {"date", "time", "punching_number", "tube_length",
-                         "shaft_type", "ocr_confidence", "id"}
+        allowed_order = {"date", "time", "punching_number", "rotor_no", "tube_length",
+                         "shaft_type", "ocr_confidence", "id", "actual_rpm"}
         order_by = filters.order_by if filters.order_by in allowed_order else "date"
         order_dir = "ASC" if filters.order_dir.upper() == "ASC" else "DESC"
 
@@ -295,8 +367,8 @@ class DatabaseManager:
             conditions: List[str] = []
             params: List = []
             if filters.punching_number:
-                conditions.append("punching_number LIKE ?")
-                params.append(f"%{filters.punching_number}%")
+                conditions.append("(punching_number LIKE ? OR rotor_no LIKE ?)")
+                params.extend([f"%{filters.punching_number}%", f"%{filters.punching_number}%"])
             if filters.date_from:
                 conditions.append("date >= ?")
                 params.append(filters.date_from)
@@ -434,13 +506,23 @@ class DatabaseManager:
     @staticmethod
     def _row_to_record(row: sqlite3.Row) -> BalancingRecord:
         """Convert a database row to a BalancingRecord."""
+        # Helper to safely get column (handles missing columns from old schema)
+        def _get(col: str, default=None):
+            try:
+                return row[col]
+            except (IndexError, KeyError):
+                return default
+
         return BalancingRecord(
             id=row["id"],
             date=row["date"],
             time=row["time"],
             punching_number=row["punching_number"],
+            rotor_no=_get("rotor_no", ""),
+            daily_seq=_get("daily_seq", 0),
             tube_length=row["tube_length"],
             shaft_type=row["shaft_type"],
+            actual_rpm=_get("actual_rpm", 0.0),
             initial_zero_degree=row["initial_zero_degree"],
             initial_left_value=row["initial_left_value"],
             initial_left_angle=row["initial_left_angle"],
@@ -450,8 +532,12 @@ class DatabaseManager:
             weight_addition_right=row["weight_addition_right"],
             after_correction_zero_degree=row["after_correction_zero_degree"],
             after_correction_left=row["after_correction_left"],
+            after_correction_left_angle=_get("after_correction_left_angle", 0.0),
             after_correction_right=row["after_correction_right"],
+            after_correction_right_angle=_get("after_correction_right_angle", 0.0),
             screenshot_path=row["screenshot_path"],
+            initial_screenshot_path=_get("initial_screenshot_path", ""),
+            correction_screenshot_path=_get("correction_screenshot_path", ""),
             ocr_confidence=row["ocr_confidence"],
             operator_notes=row["operator_notes"],
             created_at=row["created_at"],

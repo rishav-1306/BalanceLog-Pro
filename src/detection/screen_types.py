@@ -9,6 +9,15 @@ from enum import Enum, auto
 from typing import Optional, Dict, Any
 
 
+class TestPhase(Enum):
+    """Phases of a single balancing test lifecycle."""
+    WAITING_FOR_INITIAL = auto()     # Waiting for stable RED screen
+    INITIAL_CAPTURED = auto()        # Initial values captured, machine about to run
+    MACHINE_RUNNING = auto()         # Values changing rapidly, skip captures
+    WAITING_FOR_CORRECTION = auto()  # Waiting for BOTH GREEN stable screen
+    TEST_COMPLETE = auto()           # Both phases captured, ready to save
+
+
 class ScreenType(Enum):
     """Types of screens that may be displayed in the ABRO software."""
     RESULT = auto()      # Balancing result page with measurement data

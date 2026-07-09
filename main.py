@@ -14,6 +14,11 @@ import os
 # Ensure the project root is in the path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+# ── Force CPU-only PyTorch ──────────────────────────────────────────────────
+# Prevents PyTorch from attempting to use CUDA, which would fail on machines
+# without a GPU.  Must be set before torch is imported (EasyOCR imports it).
+os.environ["CUDA_VISIBLE_DEVICES"] = ""
+
 # ── PyInstaller offline support ─────────────────────────────────────────────
 # When running as a packaged .exe, redirect EasyOCR to the bundled model
 # directory instead of trying to download from the internet.

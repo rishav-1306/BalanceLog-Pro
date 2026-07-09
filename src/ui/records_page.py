@@ -9,7 +9,7 @@ from datetime import datetime
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QTableWidget,
     QTableWidgetItem, QHeaderView, QLabel, QDateEdit, QMenu,
-    QAbstractItemView, QMessageBox, QFrame,
+    QAbstractItemView, QMessageBox, QFrame, QComboBox,
 )
 from PySide6.QtCore import Qt, Signal, QDate
 from PySide6.QtGui import QFont, QColor, QAction
@@ -35,6 +35,7 @@ class RecordsPage(QWidget):
     view_screenshot = Signal(str)   # screenshot path
     export_records = Signal(list)   # list of records
     delete_record = Signal(int)     # record ID
+    record_updated = Signal(BalancingRecord)
 
     # Column definitions
     COLUMNS = [
@@ -125,23 +126,40 @@ class RecordsPage(QWidget):
 
         # Table
         self._table = QTableWidget()
+        self._table.setStyleSheet(f"""
+            QTableWidget {{
+                background-color: {Colors.BG_CARD};
+                border: 1px solid {Colors.BORDER};
+                gridline-color: {Colors.BORDER};
+                color: {Colors.TEXT_PRIMARY};
+            }}
+            QTableWidget QLineEdit {{
+                background-color: {Colors.BG_DARK};
+                color: {Colors.TEXT_PRIMARY};
+                border: 1px solid {Colors.INFO};
+                border-radius: 4px;
+                padding: 4px;
+            }}
+        """)
         self._table.setColumnCount(len(self.COLUMNS))
         self._table.setHorizontalHeaderLabels([c[0] for c in self.COLUMNS])
         self._table.setAlternatingRowColors(True)
         self._table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self._table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self._table.setSortingEnabled(True)
-        self._table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self._table.setEditTriggers(QAbstractItemView.EditTrigger.DoubleClicked | QAbstractItemView.EditTrigger.EditKeyPressed)
+        self._table.itemChanged.connect(self._on_item_changed)
         self._table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self._table.customContextMenuRequested.connect(self._show_context_menu)
         self._table.doubleClicked.connect(self._on_double_click)
         self._table.verticalHeader().setVisible(False)
+        self._table.verticalHeader().setDefaultSectionSize(38)
 
-        # Set column widths
+        # Set column widths and resize modes
         header_view = self._table.horizontalHeader()
-        for i, (_, width) in enumerate(self.COLUMNS):
-            self._table.setColumnWidth(i, width)
-        header_view.setStretchLastSection(True)
+        for i in range(len(self.COLUMNS)):
+            header_view.setSectionResizeMode(i, QHeaderView.ResizeMode.Interactive)
+        header_view.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
 
         layout.addWidget(self._table)
 
@@ -152,27 +170,28 @@ class RecordsPage(QWidget):
         """Load records into the table."""
         self._records = records
         self._table.setSortingEnabled(False)
+        self._table.blockSignals(True)
         self._table.setRowCount(len(records))
 
         for row, record in enumerate(records):
             items = [
-                (str(record.id or ""), Qt.AlignmentFlag.AlignCenter),
+                (str(record.daily_seq or record.id or ""), Qt.AlignmentFlag.AlignCenter),
                 (record.date, Qt.AlignmentFlag.AlignCenter),
                 (record.time, Qt.AlignmentFlag.AlignCenter),
-                (record.punching_number, Qt.AlignmentFlag.AlignLeft),
+                (record.rotor_no if record.rotor_no else record.punching_number, Qt.AlignmentFlag.AlignLeft),
                 (f"{record.tube_length:.0f}", Qt.AlignmentFlag.AlignCenter),
                 (record.shaft_type, Qt.AlignmentFlag.AlignCenter),
                 (f"{record.initial_left_value:.2f}", Qt.AlignmentFlag.AlignCenter),
                 (f"{record.initial_right_value:.2f}", Qt.AlignmentFlag.AlignCenter),
-                (f"{record.weight_addition_left:.2f}", Qt.AlignmentFlag.AlignCenter),
-                (f"{record.weight_addition_right:.2f}", Qt.AlignmentFlag.AlignCenter),
+                (str(record.weight_addition_left), Qt.AlignmentFlag.AlignCenter),
+                (str(record.weight_addition_right), Qt.AlignmentFlag.AlignCenter),
                 (f"{record.after_correction_left:.2f}", Qt.AlignmentFlag.AlignCenter),
                 (f"{record.after_correction_right:.2f}", Qt.AlignmentFlag.AlignCenter),
                 (f"{record.ocr_confidence:.1%}", Qt.AlignmentFlag.AlignCenter),
             ]
 
             for col, (text, alignment) in enumerate(items):
-                item = QTableWidgetItem(text)
+                item = QTableWidgetItem("") if col in (8, 9) else QTableWidgetItem(text)
                 item.setTextAlignment(alignment)
 
                 # Store record ID in first column
@@ -188,9 +207,58 @@ class RecordsPage(QWidget):
                     else:
                         item.setForeground(QColor(Colors.ERROR))
 
+                # Allow inline editing only for Punching No. (col 3)
+                if col == 3:
+                    item.setFlags(item.flags() | Qt.ItemFlag.ItemIsEditable | Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
+                else:
+                    item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+
                 self._table.setItem(row, col, item)
 
+                # Wt Add L (col 8) and Wt Add R (col 9) as comboboxes
+                if col in (8, 9):
+                    combo = QComboBox()
+                    combo.addItems(["0", "10", "20", "30", "40", "50"])
+                    try:
+                        val_float = float(text or 0)
+                        val_str = str(int(val_float))
+                    except ValueError:
+                        val_str = "0"
+                    idx = combo.findText(val_str)
+                    if idx >= 0:
+                        combo.setCurrentIndex(idx)
+                    else:
+                        combo.addItem(val_str)
+                        combo.setCurrentIndex(combo.count() - 1)
+
+                    combo.setStyleSheet(f"""
+                        QComboBox {{
+                            background-color: {Colors.BG_CARD};
+                            border: 1px solid {Colors.BORDER};
+                            border-radius: 4px;
+                            color: {Colors.TEXT_PRIMARY};
+                            padding: 2px;
+                        }}
+                    """)
+
+                    field_name = "weight_addition_left" if col == 8 else "weight_addition_right"
+                    combo.currentIndexChanged.connect(
+                        lambda _, r=record, field=field_name, cb=combo: self._on_combo_changed(r, field, cb)
+                    )
+                    self._table.setCellWidget(row, col, combo)
+
+        self._table.blockSignals(False)
         self._table.setSortingEnabled(True)
+
+        # Auto-resize columns to fit contents
+        self._table.resizeColumnsToContents()
+        # Force minimum widths for dropdown columns so they don't look compressed
+        self._table.setColumnWidth(8, max(self._table.columnWidth(8), 90))
+        self._table.setColumnWidth(9, max(self._table.columnWidth(9), 90))
+        # Ensure Punching No has a minimum width but still stretches
+        self._table.setColumnWidth(3, max(self._table.columnWidth(3), 150))
+        self._table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
+
         self._count_label.setText(f"{len(records)} records")
 
     # ─────────────────────────────────────────────────────────
@@ -213,6 +281,9 @@ class RecordsPage(QWidget):
 
     def _on_double_click(self, index) -> None:
         """Handle double-click on a row."""
+        # Col 3 (Punching No.) is editable inline, do not open detail dialog
+        if index.column() == 3:
+            return
         row = index.row()
         id_item = self._table.item(row, 0)
         if id_item:
@@ -270,3 +341,29 @@ class RecordsPage(QWidget):
             self._date_from.date().toString("yyyy-MM-dd"),
             self._date_to.date().toString("yyyy-MM-dd"),
         )
+
+    def _on_combo_changed(self, record: BalancingRecord, field: str, combo: QComboBox) -> None:
+        """Handle inline combobox edits for weight additions."""
+        try:
+            val = float(combo.currentText() or 0)
+            if getattr(record, field) != val:
+                setattr(record, field, val)
+                record.update_timestamp()
+                self.record_updated.emit(record)
+        except ValueError:
+            pass
+
+    def _on_item_changed(self, item: QTableWidgetItem) -> None:
+        """Handle inline text edits (Punching No.)."""
+        row = item.row()
+        col = item.column()
+        if col == 3 and row < len(self._records):
+            record = self._records[row]
+            new_text = item.text().strip()
+            # Only update if changed
+            current_val = record.rotor_no if record.rotor_no else record.punching_number
+            if new_text != current_val:
+                record.rotor_no = new_text
+                record.punching_number = new_text
+                record.update_timestamp()
+                self.record_updated.emit(record)

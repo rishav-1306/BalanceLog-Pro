@@ -14,7 +14,7 @@ from .image_preprocessor import ImagePreprocessor
 from .ocr_result import OCRResult, FieldExtractionResult, ExtractionSummary
 from src.config.config_manager import ConfigManager
 from src.config.constants import (
-    ROI_FIELDS, ROI_FIELD_LABELS,
+    OCR_EXTRACT_FIELDS, ROI_FIELD_LABELS,
     OCR_MAX_RETRY_ATTEMPTS, DEFAULT_OCR_ENGINE,
 )
 from src.utils.logger import get_logger
@@ -28,7 +28,7 @@ class OCREngine:
     Dual-engine OCR system for extracting balancing data from screenshots.
 
     Features:
-    - Primary: EasyOCR (GPU-accelerated if available)
+    - Primary: EasyOCR (CPU-only — no GPU required)
     - Fallback: Tesseract OCR
     - Only OCRs predefined ROI regions (never the whole screen)
     - Automatic retry with different preprocessing if confidence is low
@@ -103,7 +103,7 @@ class OCREngine:
             summary.extraction_time_ms = (time.time() - start_time) * 1000
             return summary
 
-        for field_name in ROI_FIELDS:
+        for field_name in OCR_EXTRACT_FIELDS:
             roi = rois.get(field_name)
             if roi is None:
                 logger.debug("No ROI configured for field: %s", field_name)
@@ -294,11 +294,13 @@ class OCREngine:
         text = raw_text.strip()
 
         # String fields
-        if field_name in ("punching_number", "shaft_type"):
+        if field_name in ("punching_number", "shaft_type", "rotor_no"):
             return text
 
-        # Numeric fields
-        return safe_float(text, default=0.0)
+        # Numeric fields — clean common OCR artifacts for numbers
+        # Remove any non-numeric chars except +, -, .
+        cleaned = text.replace(",", ".")
+        return safe_float(cleaned, default=0.0)
 
     # ─────────────────────────────────────────────────────────
     # Configuration Update

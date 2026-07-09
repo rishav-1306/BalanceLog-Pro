@@ -8,7 +8,7 @@ with screenshot preview, validation status, and edit capability.
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel,
     QPushButton, QLineEdit, QTextEdit, QFrame, QSizePolicy,
-    QDialogButtonBox,
+    QDialogButtonBox, QComboBox,
 )
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QFont, QPixmap
@@ -73,19 +73,19 @@ class RecordDetailDialog(QDialog):
         fields = [
             ("Date", self._record.date),
             ("Time", self._record.time),
-            ("Punching Number", self._record.punching_number),
-            ("Tube Length", f"{self._record.tube_length:.1f} mm"),
+            ("Rotor Number", self._record.rotor_no if self._record.rotor_no else self._record.punching_number),
+            ("Actual RPM", f"{self._record.actual_rpm:.0f}"),
             ("Type", self._record.shaft_type),
-            ("Initial 0°", f"{self._record.initial_zero_degree:.2f}"),
             ("Initial Left", f"{self._record.initial_left_value:.2f}"),
             ("Initial Left Angle", f"{self._record.initial_left_angle:.1f}°"),
             ("Initial Right", f"{self._record.initial_right_value:.2f}"),
             ("Initial Right Angle", f"{self._record.initial_right_angle:.1f}°"),
-            ("Weight Addition Left", f"{self._record.weight_addition_left:.2f}"),
-            ("Weight Addition Right", f"{self._record.weight_addition_right:.2f}"),
-            ("After Correction 0°", f"{self._record.after_correction_zero_degree:.2f}"),
-            ("After Correction Left", f"{self._record.after_correction_left:.2f}"),
-            ("After Correction Right", f"{self._record.after_correction_right:.2f}"),
+            ("Weight Addition Left", str(self._record.weight_addition_left)),
+            ("Weight Addition Right", str(self._record.weight_addition_right)),
+            ("Corrected Left", f"{self._record.after_correction_left:.2f}"),
+            ("Corrected Left Angle", f"{self._record.after_correction_left_angle:.1f}°"),
+            ("Corrected Right", f"{self._record.after_correction_right:.2f}"),
+            ("Corrected Right Angle", f"{self._record.after_correction_right_angle:.1f}°"),
             ("OCR Confidence", f"{self._record.ocr_confidence:.1%}"),
         ]
 
@@ -95,8 +95,24 @@ class RecordDetailDialog(QDialog):
             lbl.setFont(QFont(Fonts.FAMILY, Fonts.SIZE_SMALL))
             grid.addWidget(lbl, row, 0)
 
-            val = QLineEdit(str(value_text))
-            val.setReadOnly(True)
+            if label_text in ("Weight Addition Left", "Weight Addition Right"):
+                val = QComboBox()
+                val.addItems(["0", "10", "20", "30", "40", "50"])
+                try:
+                    val_float = float(value_text or 0)
+                    val_str = str(int(val_float))
+                except ValueError:
+                    val_str = "0"
+                idx = val.findText(val_str)
+                if idx >= 0:
+                    val.setCurrentIndex(idx)
+                else:
+                    val.addItem(val_str)
+                    val.setCurrentIndex(val.count() - 1)
+            else:
+                val = QLineEdit(str(value_text))
+                val.setReadOnly(True)
+
             self._edits[label_text] = val
             grid.addWidget(val, row, 1)
 
@@ -165,7 +181,13 @@ class RecordDetailDialog(QDialog):
         layout.addLayout(right_layout, 1)
 
     def _save(self) -> None:
-        """Save operator notes."""
+        """Save operator edits and notes."""
+        try:
+            self._record.weight_addition_left = float(self._edits["Weight Addition Left"].currentText() or 0)
+            self._record.weight_addition_right = float(self._edits["Weight Addition Right"].currentText() or 0)
+        except (ValueError, KeyError):
+            pass
+
         self._record.operator_notes = self._notes_edit.toPlainText()
         self._record.update_timestamp()
         self.record_updated.emit(self._record)

@@ -206,37 +206,54 @@ class Fonts:
     SIZE_HERO = 42
 
 
-# ─────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────
 # ROI Field Names (used in calibration)
-# ─────────────────────────────────────────────────────────────
+#
+# The ABRO screen shows values in blue boxes. The SAME ROI regions
+# are read in both phases — color detection (RED vs GREEN) determines
+# whether the values are initial or after-correction.
+#
+# ROI fields for the value boxes:
+#   left_value_box  — covers the entire left blue box (+43.8 gm, At 5 Deg.)
+#   right_value_box — covers the entire right blue box (+73.5 gm, At 154 Deg.)
+#
+# ROI fields for individual data extraction:
+#   left_value, left_angle, right_value, right_angle — sub-regions
+# ─────────────────────────────────────────────────────────
 ROI_FIELDS = [
-    "punching_number",
-    "tube_length",
-    "shaft_type",
-    "initial_zero_degree",
-    "initial_left_value",
-    "initial_left_angle",
-    "initial_right_value",
-    "initial_right_angle",
-    "weight_addition_left",
-    "weight_addition_right",
-    "after_correction_zero_degree",
-    "after_correction_left",
-    "after_correction_right",
+    "rotor_no",              # "Rotor No: 222" or "Rotor No: 19915 R 592 SLIP 180"
+    "actual_rpm",            # "Actual RPM 2306"
+    "left_value",            # "+43.8" (gm) — weight value in left blue box
+    "left_angle",            # "5" (Deg.) — angle value in left blue box
+    "right_value",           # "+73.5" (gm) — weight value in right blue box
+    "right_angle",           # "154" (Deg.) — angle value in right blue box
+    "left_value_box",        # Entire left blue box (for color detection)
+    "right_value_box",       # Entire right blue box (for color detection)
 ]
 
 ROI_FIELD_LABELS = {
-    "punching_number": "Punching Number",
-    "tube_length": "Tube Length",
-    "shaft_type": "Shaft Type (Front/Rear)",
-    "initial_zero_degree": "Initial 0°",
-    "initial_left_value": "Initial Left Value",
-    "initial_left_angle": "Initial Left Angle",
-    "initial_right_value": "Initial Right Value",
-    "initial_right_angle": "Initial Right Angle",
-    "weight_addition_left": "Weight Addition Left",
-    "weight_addition_right": "Weight Addition Right",
-    "after_correction_zero_degree": "After Correction 0°",
-    "after_correction_left": "After Correction Left",
-    "after_correction_right": "After Correction Right",
+    "rotor_no": "Rotor Number",
+    "actual_rpm": "Actual RPM",
+    "left_value": "Left Value (gm)",
+    "left_angle": "Left Angle (Deg.)",
+    "right_value": "Right Value (gm)",
+    "right_angle": "Right Angle (Deg.)",
+    "left_value_box": "Left Value Box (color detect)",
+    "right_value_box": "Right Value Box (color detect)",
 }
+
+# Fields used for OCR text extraction (subset of ROI_FIELDS)
+OCR_EXTRACT_FIELDS = [
+    "rotor_no",
+    "actual_rpm",
+    "left_value",
+    "left_angle",
+    "right_value",
+    "right_angle",
+]
+
+# Fields used for color detection only (not OCR)
+COLOR_DETECT_FIELDS = [
+    "left_value_box",
+    "right_value_box",
+]

@@ -87,9 +87,8 @@ a = Analysis(
         'pathlib',
         'logging',
         'logging.handlers',
-        # PyTorch (used by easyocr) — needed for offline model loading
+        # PyTorch CPU-only (used by EasyOCR) — needed for offline model loading
         'torch',
-        'torchvision',
     ],
     hookspath=[],
     hooksconfig={},
@@ -104,6 +103,10 @@ a = Analysis(
         'PyQt5',
         'PyQt6',
         'wx',
+        # GPU / CUDA — not needed for CPU-only build
+        'torchvision',
+        'torch.cuda',
+        'torchaudio',
     ],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,

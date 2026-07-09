@@ -103,6 +103,9 @@ class MainWindow(QMainWindow):
         self._monitor.window_lost.connect(self._on_window_lost)
         self._monitor.window_found.connect(self._on_window_found)
         self._monitor.error_occurred.connect(self._on_monitor_error)
+        self._monitor.test_phase_changed.connect(self._on_test_phase_changed)
+        self._monitor.test_complete.connect(self._on_test_complete)
+        self._monitor.color_state_changed.connect(self._on_color_state_changed)
 
         # ── Setup UI ──
         self.setWindowTitle(f"{APP_NAME} v{APP_VERSION}")
@@ -238,6 +241,7 @@ class MainWindow(QMainWindow):
         self._records_page.view_screenshot.connect(self._open_screenshot)
         self._records_page.delete_record.connect(self._delete_record)
         self._records_page.export_records.connect(self._export_records)
+        self._records_page.record_updated.connect(self._update_record)
 
         # Search
         self._search_page.search_requested.connect(self._perform_search)
@@ -287,6 +291,17 @@ class MainWindow(QMainWindow):
         self._monitor.set_capture_interval(
             self._config.get("monitoring.capture_interval_ms", 2000)
         )
+
+        # Configure color detection ROIs from calibration
+        rois = self._config.get_all_rois()
+        left_box = rois.get("left_value_box")
+        right_box = rois.get("right_value_box")
+        if left_box and right_box:
+            self._monitor.set_color_rois(left_box, right_box)
+            logger.info("Color detection ROIs configured")
+        else:
+            logger.warning("Color detection ROIs not calibrated — using manual mode")
+
         self._monitor.start_monitoring()
         self._status_monitoring.setText(f"Monitoring: Active — '{window_title}'")
         logger.info("Monitoring started for '%s'", window_title)
@@ -299,22 +314,11 @@ class MainWindow(QMainWindow):
 
     @Slot(np.ndarray)
     def _on_screen_changed(self, frame: np.ndarray) -> None:
-        """Handle a screen change — runs the OCR pipeline if result detected."""
-        # Check if this is a result page
-        detection = self._detector.detect_result_page(frame)
-
-        # In manual mode, screen changes are just recorded as previews
-        if detection.method == "manual":
-            # Update preview only
-            from src.utils.helpers import numpy_to_pixmap
-            pixmap = numpy_to_pixmap(frame)
-            self._dashboard.update_preview(pixmap, "Screen change detected")
-            return
-
-        # Auto-detection mode
-        if detection.is_result_page and detection.is_confident:
-            logger.info("Result page detected (confidence: %.2f)", detection.confidence)
-            self._process_result_frame(frame)
+        """Handle a screen change — update preview. State machine handles OCR pipeline."""
+        from src.utils.helpers import numpy_to_pixmap
+        pixmap = numpy_to_pixmap(frame)
+        phase = self._monitor.test_phase_name
+        self._dashboard.update_preview(pixmap, f"Screen change | Phase: {phase}")
 
     def _manual_capture(self) -> None:
         """Manually capture and process the current screen."""
@@ -336,54 +340,180 @@ class MainWindow(QMainWindow):
             )
             return
 
-        # Process the captured frame
+        # In manual mode, process as a single-frame capture
         self._process_result_frame(frame)
 
     def _process_result_frame(self, frame: np.ndarray) -> None:
-        """Full pipeline: save screenshot → OCR → validate → store → export."""
+        """
+        Process a single manually-captured frame.
+
+        For manual captures, we create a simple record without the two-phase
+        state machine workflow. The operator can manually trigger initial
+        and correction captures using the force_initial/force_correction buttons.
+        """
         date_str = get_date_str()
         time_str = get_time_str()
 
-        # 1. Save screenshot
         ss_path = self._file_manager.save_screenshot_path(date_str, get_time_filename())
         cv2.imwrite(str(ss_path), frame)
-        logger.info("Screenshot saved: %s", ss_path)
 
-        # 2. Create record with timestamp
         record = BalancingRecord.create_new()
         record.screenshot_path = str(ss_path)
 
-        # 3. OCR extraction
         if self._config.is_calibrated:
             if self._ocr_engine is None:
                 self._ocr_engine = OCREngine()
 
             extraction = self._ocr_engine.extract_all_fields(frame)
-
-            # Populate record from extraction
             for field_name, field_result in extraction.fields.items():
-                if hasattr(record, field_name) and field_result.parsed_value is not None:
-                    setattr(record, field_name, field_result.parsed_value)
+                if field_result.parsed_value is not None:
+                    if field_name == "rotor_no":
+                        record.rotor_no = str(field_result.parsed_value)
+                        record.punching_number = str(field_result.parsed_value)
+                    elif field_name == "actual_rpm":
+                        record.actual_rpm = float(field_result.parsed_value or 0)
             record.ocr_confidence = extraction.overall_confidence
 
-            # 4. Validate
-            validation = self._validator.validate(record, extraction.overall_confidence)
+        # Apply manual punching number if entered (overrides OCR)
+        manual_punching = self._dashboard.get_manual_punching_no()
+        if manual_punching:
+            record.rotor_no = manual_punching
+            record.punching_number = manual_punching
 
-            # 5. Confirmation dialog if needed
-            if validation.needs_confirmation or extraction.needs_review:
-                dialog = ConfirmationDialog(record, extraction, self)
+        self._save_record(record, date_str)
+
+        from src.utils.helpers import numpy_to_pixmap
+        pixmap = numpy_to_pixmap(frame)
+        self._dashboard.update_preview(pixmap, f"Manual capture at {time_str}")
+
+    @Slot(str)
+    def _on_test_phase_changed(self, phase_name: str) -> None:
+        """Handle test phase changes from the state machine."""
+        self._dashboard.update_test_phase(phase_name)
+        self._status_monitoring.setText(f"Test Phase: {phase_name}")
+        logger.info("Test phase: %s", phase_name)
+
+    @Slot(str)
+    def _on_color_state_changed(self, color_state: str) -> None:
+        """Handle color state changes (BOTH_RED, BOTH_GREEN, etc.)."""
+        self._dashboard.update_color_state(color_state)
+        logger.debug("Color state: %s", color_state)
+
+    @Slot(dict)
+    def _on_test_complete(self, test_data: dict) -> None:
+        """
+        Handle a completed test — both initial and correction captured.
+
+        Runs OCR on both frames and combines into a single BalancingRecord.
+        """
+        initial_frame = test_data.get("initial_frame")
+        correction_frame = test_data.get("correction_frame")
+
+        if initial_frame is None or correction_frame is None:
+            logger.error("Test complete but frames are missing")
+            return
+
+        date_str = get_date_str()
+        time_str = get_time_str()
+
+        # Save both screenshots
+        initial_ss = self._file_manager.save_screenshot_path(
+            date_str, f"{get_time_filename()}_initial"
+        )
+        correction_ss = self._file_manager.save_screenshot_path(
+            date_str, f"{get_time_filename()}_correction"
+        )
+        cv2.imwrite(str(initial_ss), initial_frame)
+        cv2.imwrite(str(correction_ss), correction_frame)
+        logger.info("Screenshots saved: initial=%s, correction=%s", initial_ss, correction_ss)
+
+        # Create record
+        record = BalancingRecord.create_new()
+        record.initial_screenshot_path = str(initial_ss)
+        record.correction_screenshot_path = str(correction_ss)
+        record.screenshot_path = str(correction_ss)  # Legacy: use correction as primary
+
+        # Run OCR on both frames
+        initial_extraction = None
+        avg_conf = 1.0
+        if self._config.is_calibrated:
+            if self._ocr_engine is None:
+                self._ocr_engine = OCREngine()
+
+            # OCR initial frame → populate initial fields
+            initial_extraction = self._ocr_engine.extract_all_fields(initial_frame)
+            for field_name, field_result in initial_extraction.fields.items():
+                if field_result.parsed_value is not None:
+                    # Map OCR fields to initial record fields
+                    if field_name == "rotor_no":
+                        record.rotor_no = str(field_result.parsed_value)
+                        record.punching_number = str(field_result.parsed_value)
+                    elif field_name == "actual_rpm":
+                        record.actual_rpm = float(field_result.parsed_value or 0)
+                    elif field_name == "left_value":
+                        record.initial_left_value = float(field_result.parsed_value or 0)
+                    elif field_name == "left_angle":
+                        record.initial_left_angle = float(field_result.parsed_value or 0)
+                    elif field_name == "right_value":
+                        record.initial_right_value = float(field_result.parsed_value or 0)
+                    elif field_name == "right_angle":
+                        record.initial_right_angle = float(field_result.parsed_value or 0)
+
+            # OCR correction frame → populate after-correction fields
+            correction_extraction = self._ocr_engine.extract_all_fields(correction_frame)
+            for field_name, field_result in correction_extraction.fields.items():
+                if field_result.parsed_value is not None:
+                    if field_name == "left_value":
+                        record.after_correction_left = float(field_result.parsed_value or 0)
+                    elif field_name == "left_angle":
+                        record.after_correction_left_angle = float(field_result.parsed_value or 0)
+                    elif field_name == "right_value":
+                        record.after_correction_right = float(field_result.parsed_value or 0)
+                    elif field_name == "right_angle":
+                        record.after_correction_right_angle = float(field_result.parsed_value or 0)
+
+            # Average confidence from both extractions
+            avg_conf = (
+                initial_extraction.overall_confidence +
+                correction_extraction.overall_confidence
+            ) / 2.0
+            record.ocr_confidence = avg_conf
+
+        # Apply manual punching number if entered (overrides OCR)
+        manual_punching = self._dashboard.get_manual_punching_no()
+        if manual_punching:
+            record.rotor_no = manual_punching
+            record.punching_number = manual_punching
+
+        if self._config.is_calibrated:
+
+            # Validate and show confirmation if needed
+            validation = self._validator.validate(record, avg_conf)
+            needs_review = (
+                validation.needs_confirmation or
+                (initial_extraction is not None and initial_extraction.needs_review) or
+                (correction_extraction is not None and correction_extraction.needs_review)
+            )
+
+            if needs_review:
+                dialog = ConfirmationDialog(record, initial_extraction, self)
                 dialog.confirmed.connect(lambda r: self._save_record(r, date_str))
                 dialog.rejected.connect(lambda: logger.info("Record rejected by operator"))
                 dialog.exec()
                 return
 
-        # 6. Save record
+        # Save record
         self._save_record(record, date_str)
 
-        # Update preview
+        # Update preview with correction frame
         from src.utils.helpers import numpy_to_pixmap
-        pixmap = numpy_to_pixmap(frame)
-        self._dashboard.update_preview(pixmap, f"Captured at {time_str}")
+        pixmap = numpy_to_pixmap(correction_frame)
+        self._dashboard.update_preview(
+            pixmap,
+            f"Test complete at {time_str} | "
+            f"Initial: L={record.initial_left_value}g R={record.initial_right_value}g | "
+            f"Corrected: L={record.after_correction_left}g R={record.after_correction_right}g"
+        )
 
     def _save_record(self, record: BalancingRecord, date_str: str) -> None:
         """Save record to database and optionally export to Excel."""

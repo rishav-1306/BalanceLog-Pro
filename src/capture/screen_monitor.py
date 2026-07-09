@@ -2,8 +2,12 @@
 BalanceLog Pro - Screen Monitor
 
 Background QThread that continuously monitors the ABRO software window,
-detects screen changes via frame differencing, and emits signals when
-a new result screen is detected.
+detects screen changes via frame differencing, detects text color (RED/GREEN)
+in the value boxes, and tracks the balancing test lifecycle through a
+state machine.
+
+Emits test_complete when both initial (RED) and correction (GREEN) phases
+are captured for a single test.
 """
 
 import time
@@ -15,6 +19,9 @@ from typing import Optional, Tuple
 from PySide6.QtCore import QThread, Signal, QMutex, QMutexLocker
 
 from src.capture.window_finder import WindowFinder, WindowInfo
+from src.capture.test_state_machine import TestStateMachine, TestEvent, TestCycleData
+from src.detection.color_detector import ColorDetector, ValueColorState, TextColor
+from src.detection.screen_types import TestPhase
 from src.config.constants import (
     DEFAULT_CAPTURE_INTERVAL_MS,
     DEFAULT_SSIM_THRESHOLD,
@@ -32,6 +39,8 @@ class ScreenMonitor(QThread):
     Features:
     - Captures only the ABRO window region (not full desktop)
     - Frame differencing to detect screen changes (SSIM comparison)
+    - Color detection (RED/GREEN) on value boxes
+    - Test lifecycle state machine (initial → running → correction)
     - Prevents duplicate captures
     - Emits signals for UI integration
     - Low CPU usage via configurable capture interval
@@ -41,6 +50,9 @@ class ScreenMonitor(QThread):
         screen_captured(np.ndarray): Emitted when a new frame is captured
         screen_changed(np.ndarray): Emitted when screen content changes
         result_detected(np.ndarray): Emitted when a result page is detected
+        test_phase_changed(str): Emitted when the test phase changes
+        test_complete(dict): Emitted when both initial + correction captured
+        color_state_changed(str): Emitted when detected color state changes
         window_lost(): Emitted when the ABRO window is no longer found
         window_found(str): Emitted when the ABRO window is found/refound
         monitoring_state_changed(str): Emitted when monitoring state changes
@@ -52,6 +64,9 @@ class ScreenMonitor(QThread):
     screen_captured = Signal(np.ndarray)
     screen_changed = Signal(np.ndarray)
     result_detected = Signal(np.ndarray)
+    test_phase_changed = Signal(str)
+    test_complete = Signal(dict)
+    color_state_changed = Signal(str)
     window_lost = Signal()
     window_found = Signal(str)
     monitoring_state_changed = Signal(str)
@@ -77,6 +92,19 @@ class ScreenMonitor(QThread):
         self._change_count: int = 0
         self._last_capture_time: float = 0
 
+        # Color detection and state machine
+        self._color_detector = ColorDetector()
+        self._state_machine = TestStateMachine()
+        self._last_color_state = ValueColorState.UNKNOWN
+
+        # Frame stability tracking
+        self._consecutive_stable_frames: int = 0
+        self._stability_threshold = 3  # frames
+
+        # ROI coordinates for color detection (set via calibration)
+        self._left_box_roi: Optional[dict] = None
+        self._right_box_roi: Optional[dict] = None
+
     # ─────────────────────────────────────────────────────────
     # Configuration
     # ─────────────────────────────────────────────────────────
@@ -95,6 +123,12 @@ class ScreenMonitor(QThread):
         with QMutexLocker(self._mutex):
             self._ssim_threshold = max(0.5, min(1.0, threshold))
 
+    def set_color_rois(self, left_roi: dict, right_roi: dict) -> None:
+        """Set the ROI coordinates for color detection on value boxes."""
+        with QMutexLocker(self._mutex):
+            self._left_box_roi = left_roi
+            self._right_box_roi = right_roi
+
     @property
     def state(self) -> MonitoringState:
         return self._state
@@ -107,6 +141,16 @@ class ScreenMonitor(QThread):
     def change_count(self) -> int:
         return self._change_count
 
+    @property
+    def test_phase(self) -> TestPhase:
+        """Current test phase from the state machine."""
+        return self._state_machine.phase
+
+    @property
+    def test_phase_name(self) -> str:
+        """Human-readable current test phase name."""
+        return self._state_machine.phase_name
+
     # ─────────────────────────────────────────────────────────
     # Control
     # ─────────────────────────────────────────────────────────
@@ -117,6 +161,8 @@ class ScreenMonitor(QThread):
             self._previous_frame = None
             self._capture_count = 0
             self._change_count = 0
+            self._consecutive_stable_frames = 0
+            self._state_machine.reset()
         self._set_state(MonitoringState.RUNNING)
         if not self.isRunning():
             self.start()
@@ -135,6 +181,30 @@ class ScreenMonitor(QThread):
         self._state = state
         self.monitoring_state_changed.emit(state.name)
 
+    def reset_test(self) -> None:
+        """Reset the test state machine (e.g., after operator cancels a test)."""
+        self._state_machine.reset()
+        self._consecutive_stable_frames = 0
+        self.test_phase_changed.emit(self._state_machine.phase_name)
+
+    # ─────────────────────────────────────────────────────────
+    # Manual Triggers
+    # ─────────────────────────────────────────────────────────
+    def force_initial_capture(self) -> None:
+        """Force capture of initial values (manual trigger)."""
+        frame = self.capture_now()
+        if frame is not None:
+            self._state_machine.force_initial_capture(frame)
+            self.test_phase_changed.emit(self._state_machine.phase_name)
+
+    def force_correction_capture(self) -> None:
+        """Force capture of correction values (manual trigger)."""
+        frame = self.capture_now()
+        if frame is not None:
+            self._state_machine.force_correction_capture(frame)
+            if self._state_machine.phase == TestPhase.TEST_COMPLETE:
+                self._emit_test_complete()
+
     # ─────────────────────────────────────────────────────────
     # Main Loop
     # ─────────────────────────────────────────────────────────
@@ -150,6 +220,8 @@ class ScreenMonitor(QThread):
                     window_title = self._window_title
                     interval = self._capture_interval_ms
                     threshold = self._ssim_threshold
+                    left_roi = self._left_box_roi
+                    right_roi = self._right_box_roi
 
                 try:
                     # Find the ABRO window
@@ -178,10 +250,15 @@ class ScreenMonitor(QThread):
                     self._capture_count += 1
                     self.screen_captured.emit(frame)
 
-                    # Check for screen changes
+                    # Check for screen stability (SSIM comparison)
+                    is_stable = False
                     if self._previous_frame is not None:
                         ssim = self._compute_ssim(self._previous_frame, frame)
-                        if ssim < threshold:
+                        if ssim >= threshold:
+                            self._consecutive_stable_frames += 1
+                            is_stable = True
+                        else:
+                            self._consecutive_stable_frames = 0
                             self._change_count += 1
                             self.screen_changed.emit(frame)
                             logger.debug(
@@ -195,12 +272,45 @@ class ScreenMonitor(QThread):
 
                     self._previous_frame = frame.copy()
 
+                    # ── Color Detection & State Machine ──
+                    color_state = ValueColorState.UNKNOWN
+                    if left_roi and right_roi:
+                        color_state, left_result, right_result = \
+                            self._color_detector.detect_value_state(
+                                frame, left_roi, right_roi
+                            )
+
+                        # Emit color state change
+                        if color_state != self._last_color_state:
+                            self._last_color_state = color_state
+                            self.color_state_changed.emit(color_state.name)
+
+                    # Feed frame to state machine
+                    event = self._state_machine.process_frame(
+                        frame, color_state, is_stable
+                    )
+
+                    # Handle state machine events
+                    if event in (TestEvent.INITIAL_CAPTURED, TestEvent.PHASE_CHANGED):
+                        self.test_phase_changed.emit(
+                            self._state_machine.phase_name
+                        )
+
+                    if event == TestEvent.TEST_COMPLETE:
+                        self.test_phase_changed.emit(
+                            self._state_machine.phase_name
+                        )
+                        self._emit_test_complete()
+
                     # Emit stats periodically
                     if self._capture_count % 10 == 0:
                         self.stats_updated.emit({
                             "captures": self._capture_count,
                             "changes": self._change_count,
                             "state": self._state.name,
+                            "test_phase": self._state_machine.phase.name,
+                            "color_state": color_state.name,
+                            "stable_frames": self._consecutive_stable_frames,
                         })
 
                 except Exception as e:
@@ -212,6 +322,25 @@ class ScreenMonitor(QThread):
 
         self._set_state(MonitoringState.IDLE)
         logger.info("Monitor thread stopped")
+
+    def _emit_test_complete(self) -> None:
+        """Emit the test_complete signal with test cycle data."""
+        test_data = self._state_machine.get_completed_test()
+        if test_data is not None:
+            data = {
+                "initial_frame": test_data.initial.frame if test_data.initial else None,
+                "correction_frame": test_data.correction.frame if test_data.correction else None,
+                "started_at": test_data.started_at,
+                "completed_at": test_data.completed_at,
+                "duration_sec": test_data.duration_sec,
+            }
+            self.test_complete.emit(data)
+            logger.info(
+                "Test complete emitted (duration: %.1fs)", test_data.duration_sec
+            )
+            # Reset for next test
+            self._state_machine.reset()
+            self.test_phase_changed.emit(self._state_machine.phase_name)
 
     # ─────────────────────────────────────────────────────────
     # Window Detection
@@ -333,3 +462,4 @@ class ScreenMonitor(QThread):
 
         with mss.mss() as sct:
             return self._capture_region(sct, rect)
+

@@ -23,8 +23,14 @@ class BalancingRecord:
     """
     Complete record of a single balancing cycle.
 
-    All measurements extracted by OCR from the ABRO result screen,
-    plus metadata about the capture and validation.
+    Captures data from TWO phases of the ABRO screen:
+    1. Initial phase (RED text) — initial imbalance values
+    2. Correction phase (GREEN text) — after-correction values
+
+    The same left_value/left_angle/right_value/right_angle ROIs are read
+    in both phases. Color detection determines which phase the values
+    belong to, and they are stored in the appropriate initial_* or
+    after_correction_* fields.
     """
     # ── Primary Key ──
     id: Optional[int] = None
@@ -34,28 +40,37 @@ class BalancingRecord:
     time: str = ""          # HH:MM:SS
 
     # ── Identification ──
-    punching_number: str = ""
+    punching_number: str = ""   # Legacy — maps to rotor_no for backward compat
+    rotor_no: str = ""          # Rotor number from ABRO screen
+    daily_seq: int = 0          # Serial number of the task of the day
     tube_length: float = 0.0
     shaft_type: str = "Unknown"  # Front / Rear
+    actual_rpm: float = 0.0     # Actual RPM from ABRO screen
 
-    # ── Initial Imbalance ──
+    # ── Initial Imbalance (RED text phase) ──
     initial_zero_degree: float = 0.0
     initial_left_value: float = 0.0
     initial_left_angle: float = 0.0
     initial_right_value: float = 0.0
     initial_right_angle: float = 0.0
 
-    # ── Weight Addition ──
+    # ── Weight Addition (manually entered or from separate screen) ──
     weight_addition_left: float = 0.0
     weight_addition_right: float = 0.0
 
-    # ── After Correction ──
+    # ── After Correction (GREEN text phase) ──
     after_correction_zero_degree: float = 0.0
-    after_correction_left: float = 0.0
-    after_correction_right: float = 0.0
+    after_correction_left: float = 0.0         # Left value after correction
+    after_correction_left_angle: float = 0.0   # Left angle after correction
+    after_correction_right: float = 0.0        # Right value after correction
+    after_correction_right_angle: float = 0.0  # Right angle after correction
+
+    # ── Screenshots (one per phase) ──
+    screenshot_path: str = ""              # Legacy / primary screenshot
+    initial_screenshot_path: str = ""      # Screenshot of RED (initial) screen
+    correction_screenshot_path: str = ""   # Screenshot of GREEN (correction) screen
 
     # ── Metadata ──
-    screenshot_path: str = ""
     ocr_confidence: float = 0.0
     operator_notes: str = ""
 

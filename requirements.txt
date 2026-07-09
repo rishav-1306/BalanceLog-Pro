@@ -1,5 +1,6 @@
 # BalanceLog Pro - Dependencies
 # Production-grade balancing record digitization
+# NOTE: This build is CPU-only — no GPU/CUDA required.
 
 # UI Framework
 PySide6>=6.7.0
@@ -11,6 +12,14 @@ numpy>=1.26.0
 # OCR Engines
 easyocr>=1.7.0
 pytesseract>=0.3.10
+
+# PyTorch (CPU-only) — required by EasyOCR for model inference.
+# Install these BEFORE easyocr so it doesn't pull the full GPU build:
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+# Then install the rest:
+#   pip install -r requirements.txt
+torch
+torchvision
 
 # Screen Capture
 mss>=9.0.0

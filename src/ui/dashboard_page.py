@@ -8,7 +8,7 @@ and quick-action buttons. Industrial dark-themed with status cards.
 from datetime import datetime
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
-    QPushButton, QLabel, QFrame, QSizePolicy,
+    QPushButton, QLabel, QFrame, QSizePolicy, QLineEdit,
 )
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QFont, QPixmap
@@ -104,6 +104,19 @@ class DashboardPage(QWidget):
         )
         cards_layout.addWidget(self._card_storage, 1, 2)
 
+        # Test phase card (spans full width at bottom of cards)
+        self._card_test_phase = StatusCard(
+            "TEST PHASE", "Idle", "Waiting to start monitoring",
+            accent_color=Colors.INFO,
+        )
+        cards_layout.addWidget(self._card_test_phase, 2, 0)
+
+        self._card_color_state = StatusCard(
+            "COLOR DETECTION", "—", "Text color in value boxes",
+            accent_color=Colors.TEXT_DISABLED,
+        )
+        cards_layout.addWidget(self._card_color_state, 2, 1)
+
         layout.addLayout(cards_layout)
 
         # ── Action Buttons + Preview Row ──
@@ -137,6 +150,26 @@ class DashboardPage(QWidget):
         monitor_row.addWidget(self._monitor_label)
         monitor_row.addStretch()
         actions_layout.addLayout(monitor_row)
+
+        # Manual Punching No text box
+        punching_row = QHBoxLayout()
+        lbl_punching = QLabel("Punching No:")
+        lbl_punching.setStyleSheet(f"color: {Colors.TEXT_PRIMARY}; background: transparent;")
+        lbl_punching.setFont(QFont(Fonts.FAMILY, Fonts.SIZE_SMALL, QFont.Weight.Bold))
+        self._edit_punching = QLineEdit()
+        self._edit_punching.setPlaceholderText("Enter Punching/Rotor No...")
+        self._edit_punching.setStyleSheet(f"""
+            QLineEdit {{
+                background-color: {Colors.BG_DARK};
+                border: 1px solid {Colors.BORDER};
+                border-radius: 6px;
+                color: {Colors.TEXT_PRIMARY};
+                padding: 8px;
+            }}
+        """)
+        punching_row.addWidget(lbl_punching)
+        punching_row.addWidget(self._edit_punching)
+        actions_layout.addLayout(punching_row)
 
         # Start button
         self._btn_start = QPushButton("▶  Start Monitoring")
@@ -265,6 +298,70 @@ class DashboardPage(QWidget):
         self._preview_viewer.load_pixmap(pixmap)
         self._preview_info.setText(info or datetime.now().strftime("%H:%M:%S"))
 
+    def update_test_phase(self, phase_name: str) -> None:
+        """Update the test phase status card."""
+        self._card_test_phase.set_value(phase_name)
+
+        # Color-code the phase
+        phase_colors = {
+            "Waiting for Initial Values": Colors.INFO,
+            "Initial Values Captured": Colors.WARNING,
+            "Machine Running": Colors.WARNING_LIGHT,
+            "Waiting for Correction Values": Colors.INFO,
+            "Test Complete": Colors.SUCCESS,
+        }
+        color = phase_colors.get(phase_name, Colors.TEXT_DISABLED)
+        self._card_test_phase.set_accent_color(color)
+
+        # Update subtitle
+        phase_hints = {
+            "Waiting for Initial Values": "Looking for RED text in both value boxes",
+            "Initial Values Captured": "Waiting for machine to start running",
+            "Machine Running": "Values changing — do not touch",
+            "Waiting for Correction Values": "Looking for GREEN text in both value boxes",
+            "Test Complete": "Both phases captured — saving record",
+        }
+        self._card_test_phase.set_subtitle(
+            phase_hints.get(phase_name, "")
+        )
+
+    def update_color_state(self, color_state: str) -> None:
+        """Update the color detection status card."""
+        display_names = {
+            "BOTH_RED": "BOTH RED",
+            "BOTH_GREEN": "BOTH GREEN",
+            "MIXED": "MIXED",
+            "UNKNOWN": "—",
+        }
+        color_map = {
+            "BOTH_RED": Colors.ERROR,
+            "BOTH_GREEN": Colors.SUCCESS,
+            "MIXED": Colors.WARNING,
+            "UNKNOWN": Colors.TEXT_DISABLED,
+        }
+        self._card_color_state.set_value(display_names.get(color_state, color_state))
+        self._card_color_state.set_accent_color(
+            color_map.get(color_state, Colors.TEXT_DISABLED)
+        )
+
+        subtitle_map = {
+            "BOTH_RED": "Initial imbalance values (OUT OF TOL)",
+            "BOTH_GREEN": "After correction values (IN TOL)",
+            "MIXED": "Correction in progress — waiting for both green",
+            "UNKNOWN": "Cannot determine text color",
+        }
+        self._card_color_state.set_subtitle(
+            subtitle_map.get(color_state, "")
+        )
+
     def _update_time(self) -> None:
         """Update the time display."""
         self._time_label.setText(datetime.now().strftime("%H:%M:%S"))
+
+    def get_manual_punching_no(self) -> str:
+        """Get the manually entered punching number."""
+        return self._edit_punching.text().strip()
+
+    def clear_manual_punching_no(self) -> None:
+        """Clear the manual punching number text box."""
+        self._edit_punching.clear()

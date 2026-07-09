@@ -88,31 +88,33 @@ class ValidationEngine:
     # ─────────────────────────────────────────────────────────
     @staticmethod
     def _validate_punching_number(record: BalancingRecord, result: ValidationResult) -> None:
-        """Punching number must not be empty."""
-        if not record.punching_number or not record.punching_number.strip():
+        """Rotor number (punching number) must not be empty."""
+        val = record.rotor_no if record.rotor_no else record.punching_number
+        if not val or not val.strip():
             result.add(FieldValidation(
-                field_name="punching_number",
+                field_name="rotor_no",
                 is_valid=False,
                 severity=ValidationSeverity.ERROR,
-                message="Punching number is required",
-                value=record.punching_number,
+                message="Rotor number is required",
+                value=val,
             ))
-        elif len(record.punching_number.strip()) < 2:
+        elif len(val.strip()) < 2:
             result.add(FieldValidation(
-                field_name="punching_number",
+                field_name="rotor_no",
                 is_valid=False,
                 severity=ValidationSeverity.WARNING,
-                message="Punching number seems too short",
-                value=record.punching_number,
+                message="Rotor number seems too short",
+                value=val,
             ))
 
     @staticmethod
     def _validate_tube_length(record: BalancingRecord, result: ValidationResult) -> None:
         """Tube length must be within physical limits."""
+        # Tube length is not strictly required on some screens; make it a warning if zero
         if record.tube_length <= 0:
             result.add(FieldValidation(
                 field_name="tube_length",
-                is_valid=False,
+                is_valid=True,
                 severity=ValidationSeverity.WARNING,
                 message="Tube length is zero or not provided",
                 value=record.tube_length,
@@ -141,7 +143,7 @@ class ValidationEngine:
         if record.shaft_type not in valid_types:
             result.add(FieldValidation(
                 field_name="shaft_type",
-                is_valid=False,
+                is_valid=True,
                 severity=ValidationSeverity.WARNING,
                 message=f"Unknown shaft type: '{record.shaft_type}'",
                 value=record.shaft_type,
@@ -171,7 +173,7 @@ class ValidationEngine:
             elif value > MAX_WEIGHT_VALUE:
                 result.add(FieldValidation(
                     field_name=field_name,
-                    is_valid=False,
+                    is_valid=True,
                     severity=ValidationSeverity.WARNING,
                     message=f"Weight value {value}g exceeds expected maximum ({MAX_WEIGHT_VALUE}g)",
                     value=value,
@@ -182,6 +184,8 @@ class ValidationEngine:
         angle_fields = {
             "initial_left_angle": record.initial_left_angle,
             "initial_right_angle": record.initial_right_angle,
+            "after_correction_left_angle": record.after_correction_left_angle,
+            "after_correction_right_angle": record.after_correction_right_angle,
         }
 
         for field_name, value in angle_fields.items():
