@@ -298,9 +298,11 @@ class MainWindow(QMainWindow):
         right_box = rois.get("right_value_box")
         if left_box and right_box:
             self._monitor.set_color_rois(left_box, right_box)
-            logger.info("Color detection ROIs configured")
+            logger.info("Color detection: ROI-based mode (calibrated)")
         else:
-            logger.warning("Color detection ROIs not calibrated — using manual mode")
+            # Clear ROIs so monitor uses whole-frame detection
+            self._monitor.set_color_rois(None, None)
+            logger.info("Color detection: whole-frame mode (no calibration)")
 
         self._monitor.start_monitoring()
         self._status_monitoring.setText(f"Monitoring: Active — '{window_title}'")
@@ -310,6 +312,8 @@ class MainWindow(QMainWindow):
         """Stop the screen monitoring thread."""
         self._monitor.stop_monitoring()
         self._status_monitoring.setText("Monitoring: Stopped")
+        # Explicitly update dashboard to IDLE so buttons always reset
+        self._dashboard.update_monitoring_state(MonitoringState.IDLE)
         logger.info("Monitoring stopped")
 
     @Slot(np.ndarray)
@@ -360,19 +364,19 @@ class MainWindow(QMainWindow):
         record = BalancingRecord.create_new()
         record.screenshot_path = str(ss_path)
 
-        if self._config.is_calibrated:
-            if self._ocr_engine is None:
-                self._ocr_engine = OCREngine()
+        # Always run OCR (engine handles calibrated vs full-frame mode internally)
+        if self._ocr_engine is None:
+            self._ocr_engine = OCREngine()
 
-            extraction = self._ocr_engine.extract_all_fields(frame)
-            for field_name, field_result in extraction.fields.items():
-                if field_result.parsed_value is not None:
-                    if field_name == "rotor_no":
-                        record.rotor_no = str(field_result.parsed_value)
-                        record.punching_number = str(field_result.parsed_value)
-                    elif field_name == "actual_rpm":
-                        record.actual_rpm = float(field_result.parsed_value or 0)
-            record.ocr_confidence = extraction.overall_confidence
+        extraction = self._ocr_engine.extract_all_fields(frame)
+        for field_name, field_result in extraction.fields.items():
+            if field_result.parsed_value is not None:
+                if field_name == "rotor_no":
+                    record.rotor_no = str(field_result.parsed_value)
+                    record.punching_number = str(field_result.parsed_value)
+                elif field_name == "actual_rpm":
+                    record.actual_rpm = float(field_result.parsed_value or 0)
+        record.ocr_confidence = extraction.overall_confidence
 
         # Apply manual punching number if entered (overrides OCR)
         manual_punching = self._dashboard.get_manual_punching_no()
@@ -433,51 +437,48 @@ class MainWindow(QMainWindow):
         record.correction_screenshot_path = str(correction_ss)
         record.screenshot_path = str(correction_ss)  # Legacy: use correction as primary
 
-        # Run OCR on both frames
-        initial_extraction = None
-        avg_conf = 1.0
-        if self._config.is_calibrated:
-            if self._ocr_engine is None:
-                self._ocr_engine = OCREngine()
+        # Always run OCR on both frames (engine handles calibrated vs full-frame internally)
+        if self._ocr_engine is None:
+            self._ocr_engine = OCREngine()
 
-            # OCR initial frame → populate initial fields
-            initial_extraction = self._ocr_engine.extract_all_fields(initial_frame)
-            for field_name, field_result in initial_extraction.fields.items():
-                if field_result.parsed_value is not None:
-                    # Map OCR fields to initial record fields
-                    if field_name == "rotor_no":
-                        record.rotor_no = str(field_result.parsed_value)
-                        record.punching_number = str(field_result.parsed_value)
-                    elif field_name == "actual_rpm":
-                        record.actual_rpm = float(field_result.parsed_value or 0)
-                    elif field_name == "left_value":
-                        record.initial_left_value = float(field_result.parsed_value or 0)
-                    elif field_name == "left_angle":
-                        record.initial_left_angle = float(field_result.parsed_value or 0)
-                    elif field_name == "right_value":
-                        record.initial_right_value = float(field_result.parsed_value or 0)
-                    elif field_name == "right_angle":
-                        record.initial_right_angle = float(field_result.parsed_value or 0)
+        # OCR initial frame → populate initial fields
+        initial_extraction = self._ocr_engine.extract_all_fields(initial_frame)
+        for field_name, field_result in initial_extraction.fields.items():
+            if field_result.parsed_value is not None:
+                # Map OCR fields to initial record fields
+                if field_name == "rotor_no":
+                    record.rotor_no = str(field_result.parsed_value)
+                    record.punching_number = str(field_result.parsed_value)
+                elif field_name == "actual_rpm":
+                    record.actual_rpm = float(field_result.parsed_value or 0)
+                elif field_name == "left_value":
+                    record.initial_left_value = float(field_result.parsed_value or 0)
+                elif field_name == "left_angle":
+                    record.initial_left_angle = float(field_result.parsed_value or 0)
+                elif field_name == "right_value":
+                    record.initial_right_value = float(field_result.parsed_value or 0)
+                elif field_name == "right_angle":
+                    record.initial_right_angle = float(field_result.parsed_value or 0)
 
-            # OCR correction frame → populate after-correction fields
-            correction_extraction = self._ocr_engine.extract_all_fields(correction_frame)
-            for field_name, field_result in correction_extraction.fields.items():
-                if field_result.parsed_value is not None:
-                    if field_name == "left_value":
-                        record.after_correction_left = float(field_result.parsed_value or 0)
-                    elif field_name == "left_angle":
-                        record.after_correction_left_angle = float(field_result.parsed_value or 0)
-                    elif field_name == "right_value":
-                        record.after_correction_right = float(field_result.parsed_value or 0)
-                    elif field_name == "right_angle":
-                        record.after_correction_right_angle = float(field_result.parsed_value or 0)
+        # OCR correction frame → populate after-correction fields
+        correction_extraction = self._ocr_engine.extract_all_fields(correction_frame)
+        for field_name, field_result in correction_extraction.fields.items():
+            if field_result.parsed_value is not None:
+                if field_name == "left_value":
+                    record.after_correction_left = float(field_result.parsed_value or 0)
+                elif field_name == "left_angle":
+                    record.after_correction_left_angle = float(field_result.parsed_value or 0)
+                elif field_name == "right_value":
+                    record.after_correction_right = float(field_result.parsed_value or 0)
+                elif field_name == "right_angle":
+                    record.after_correction_right_angle = float(field_result.parsed_value or 0)
 
-            # Average confidence from both extractions
-            avg_conf = (
-                initial_extraction.overall_confidence +
-                correction_extraction.overall_confidence
-            ) / 2.0
-            record.ocr_confidence = avg_conf
+        # Average confidence from both extractions
+        avg_conf = (
+            initial_extraction.overall_confidence +
+            correction_extraction.overall_confidence
+        ) / 2.0
+        record.ocr_confidence = avg_conf
 
         # Apply manual punching number if entered (overrides OCR)
         manual_punching = self._dashboard.get_manual_punching_no()
@@ -485,22 +486,20 @@ class MainWindow(QMainWindow):
             record.rotor_no = manual_punching
             record.punching_number = manual_punching
 
-        if self._config.is_calibrated:
+        # Validate and show confirmation if needed
+        validation = self._validator.validate(record, avg_conf)
+        needs_review = (
+            validation.needs_confirmation or
+            initial_extraction.needs_review or
+            correction_extraction.needs_review
+        )
 
-            # Validate and show confirmation if needed
-            validation = self._validator.validate(record, avg_conf)
-            needs_review = (
-                validation.needs_confirmation or
-                (initial_extraction is not None and initial_extraction.needs_review) or
-                (correction_extraction is not None and correction_extraction.needs_review)
-            )
-
-            if needs_review:
-                dialog = ConfirmationDialog(record, initial_extraction, self)
-                dialog.confirmed.connect(lambda r: self._save_record(r, date_str))
-                dialog.rejected.connect(lambda: logger.info("Record rejected by operator"))
-                dialog.exec()
-                return
+        if needs_review:
+            dialog = ConfirmationDialog(record, initial_extraction, self)
+            dialog.confirmed.connect(lambda r: self._save_record(r, date_str))
+            dialog.rejected.connect(lambda: logger.info("Record rejected by operator"))
+            dialog.exec()
+            return
 
         # Save record
         self._save_record(record, date_str)

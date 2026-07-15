@@ -262,12 +262,16 @@ class DashboardPage(QWidget):
             self._card_monitoring.set_accent_color(Colors.WARNING)
             self._monitor_indicator.set_warning()
             self._monitor_label.setText("Monitoring: Window Lost")
+            self._btn_start.setEnabled(False)
+            self._btn_stop.setEnabled(True)  # Allow stopping even when window is lost
         elif state == MonitoringState.ERROR:
             self._card_monitoring.set_value("ERROR")
             self._card_monitoring.set_subtitle("Monitor error occurred")
             self._card_monitoring.set_accent_color(Colors.ERROR)
             self._monitor_indicator.set_stopped()
             self._monitor_label.setText("Monitoring: Error")
+            self._btn_start.setEnabled(False)
+            self._btn_stop.setEnabled(True)  # Allow stopping on error too
         else:
             self._card_monitoring.set_value("IDLE")
             self._card_monitoring.set_subtitle("Not running")

@@ -4,11 +4,16 @@ BalanceLog Pro - OCR Engine
 Dual-engine OCR system using EasyOCR (primary) and Tesseract (fallback).
 Extracts text from predefined ROI regions with confidence scoring,
 automatic retry with different preprocessing if confidence is low.
+
+Supports a full-frame fallback mode when no ROI calibration exists:
+runs OCR on the entire screenshot and uses regex + spatial positioning
+to identify ABRO-specific fields.
 """
 
+import re
 import time
 import numpy as np
-from typing import Optional, Dict, List
+from typing import Optional, Dict, List, Tuple
 
 from .image_preprocessor import ImagePreprocessor
 from .ocr_result import OCRResult, FieldExtractionResult, ExtractionSummary
@@ -16,6 +21,7 @@ from src.config.config_manager import ConfigManager
 from src.config.constants import (
     OCR_EXTRACT_FIELDS, ROI_FIELD_LABELS,
     OCR_MAX_RETRY_ATTEMPTS, DEFAULT_OCR_ENGINE,
+    ABRO_FIELD_PATTERNS, ABRO_WEIGHT_PATTERN,
 )
 from src.utils.logger import get_logger
 from src.utils.helpers import safe_float
@@ -99,7 +105,9 @@ class OCREngine:
 
         rois = self._config.get_all_rois()
         if not rois:
-            logger.warning("No ROI configuration found — calibration required")
+            # No calibration — use full-frame OCR fallback
+            logger.info("No ROI calibration — using full-frame OCR mode")
+            summary = self.extract_from_full_frame(image)
             summary.extraction_time_ms = (time.time() - start_time) * 1000
             return summary
 
@@ -281,6 +289,176 @@ class OCREngine:
         except Exception as e:
             logger.error("Tesseract error: %s", e)
             return OCRResult(text="", confidence=0.0, engine_used="tesseract")
+
+    # ─────────────────────────────────────────────────────────
+    # Full-Frame OCR (no calibration fallback)
+    # ─────────────────────────────────────────────────────────
+    def extract_from_full_frame(self, image: np.ndarray) -> ExtractionSummary:
+        """
+        Extract ABRO fields from the entire screenshot without ROI calibration.
+
+        Runs EasyOCR on the full image, then uses regex pattern matching and
+        spatial positioning (x-coordinates) to identify individual fields.
+
+        Args:
+            image: Full BGR screenshot of the ABRO result screen
+
+        Returns:
+            ExtractionSummary with per-field results
+        """
+        summary = ExtractionSummary()
+
+        try:
+            reader = self._get_easyocr_reader()
+            # Run OCR on the full image with detail=1 for bounding boxes
+            results = reader.readtext(image, detail=1)
+
+            if not results:
+                logger.warning("Full-frame OCR returned no text")
+                return summary
+
+            # Log all detected text for debugging
+            logger.info("Full-frame OCR detected %d text regions", len(results))
+            for bbox, text, conf in results:
+                logger.debug("  [%.2f] '%s' at x=%.0f y=%.0f",
+                             conf, text, bbox[0][0], bbox[0][1])
+
+            # Build structured list: (text, confidence, center_x, center_y)
+            detections = []
+            for bbox, text, conf in results:
+                # bbox is [[x1,y1],[x2,y2],[x3,y3],[x4,y4]]
+                cx = sum(pt[0] for pt in bbox) / 4.0
+                cy = sum(pt[1] for pt in bbox) / 4.0
+                detections.append((text.strip(), float(conf), cx, cy))
+
+            # Concatenate all text for regex matching
+            full_text = " ".join(d[0] for d in detections)
+            avg_conf = sum(d[1] for d in detections) / len(detections)
+
+            logger.info("Full-frame text: '%s'", full_text[:200])
+
+            # ── Extract Rotor No ──
+            rotor_match = re.search(
+                ABRO_FIELD_PATTERNS["rotor_no"], full_text, re.IGNORECASE
+            )
+            if rotor_match:
+                rotor_val = rotor_match.group(1).strip()
+                summary.fields["rotor_no"] = FieldExtractionResult(
+                    field_name="rotor_no",
+                    field_label=ROI_FIELD_LABELS.get("rotor_no", "Rotor Number"),
+                    raw_text=rotor_val,
+                    parsed_value=rotor_val,
+                    confidence=avg_conf,
+                    engine_used="easyocr",
+                )
+                logger.info("Full-frame → rotor_no: '%s'", rotor_val)
+
+            # ── Extract Actual RPM ──
+            rpm_match = re.search(
+                ABRO_FIELD_PATTERNS["actual_rpm"], full_text, re.IGNORECASE
+            )
+            if rpm_match:
+                rpm_val = rpm_match.group(1).strip()
+                summary.fields["actual_rpm"] = FieldExtractionResult(
+                    field_name="actual_rpm",
+                    field_label=ROI_FIELD_LABELS.get("actual_rpm", "Actual RPM"),
+                    raw_text=rpm_val,
+                    parsed_value=safe_float(rpm_val, 0.0),
+                    confidence=avg_conf,
+                    engine_used="easyocr",
+                )
+                logger.info("Full-frame → actual_rpm: '%s'", rpm_val)
+
+            # ── Extract weight values and angles ──
+            # Strategy: find all detections containing weight patterns ("gm")
+            # and angle patterns ("Deg"). Use x-position to assign left vs right.
+            self._extract_weight_angle_fields(detections, image, summary)
+
+        except Exception as e:
+            logger.error("Full-frame OCR failed: %s", e, exc_info=True)
+
+        summary.compute_summary()
+        return summary
+
+    def _extract_weight_angle_fields(
+        self,
+        detections: List[Tuple[str, float, float, float]],
+        image: np.ndarray,
+        summary: ExtractionSummary,
+    ) -> None:
+        """
+        Extract weight (gm) values from OCR detections.
+
+        The ABRO screen shows two blue boxes, each containing a weight like:
+            +43.8 gm
+
+        Uses x-position to assign values to left vs right:
+        - Detections in the left half of the image → left_value
+        - Detections in the right half → right_value
+        """
+        img_width = image.shape[1]
+        img_center_x = img_width / 2.0
+
+        # Collect weight candidates: (value_str, confidence, center_x, center_y)
+        weight_candidates: List[Tuple[str, float, float, float]] = []
+
+        for text, conf, cx, cy in detections:
+            # Check for weight: number with +/- near "gm"
+            # e.g. "+43.8 gm" or "73.5 gm"
+            if re.search(r"gm|gr|gram", text, re.IGNORECASE):
+                wt_match = re.search(ABRO_WEIGHT_PATTERN, text)
+                if wt_match:
+                    weight_candidates.append(
+                        (wt_match.group(0).replace(" ", ""), conf, cx, cy)
+                    )
+                continue
+
+            # Standalone signed number like "+43.8" or "-12.5" (likely a weight)
+            wt_standalone = re.match(r"^([+\-]\s*\d+\.?\d*)$", text.strip())
+            if wt_standalone:
+                weight_candidates.append(
+                    (wt_standalone.group(1).replace(" ", ""), conf, cx, cy)
+                )
+
+        # ── Assign to left/right using x-position ──
+        left_weights = sorted(
+            [c for c in weight_candidates if c[2] < img_center_x],
+            key=lambda c: c[3],  # sort by y-position (topmost first)
+        )
+        right_weights = sorted(
+            [c for c in weight_candidates if c[2] >= img_center_x],
+            key=lambda c: c[3],
+        )
+
+        # Take the first (topmost) candidate for each side
+        if left_weights:
+            val, conf, _, _ = left_weights[0]
+            summary.fields["left_value"] = FieldExtractionResult(
+                field_name="left_value",
+                field_label=ROI_FIELD_LABELS.get("left_value", "Left Value (gm)"),
+                raw_text=val,
+                parsed_value=safe_float(val, 0.0),
+                confidence=conf,
+                engine_used="easyocr",
+            )
+            logger.info("Full-frame → left_value: '%s'", val)
+
+        if right_weights:
+            val, conf, _, _ = right_weights[0]
+            summary.fields["right_value"] = FieldExtractionResult(
+                field_name="right_value",
+                field_label=ROI_FIELD_LABELS.get("right_value", "Right Value (gm)"),
+                raw_text=val,
+                parsed_value=safe_float(val, 0.0),
+                confidence=conf,
+                engine_used="easyocr",
+            )
+            logger.info("Full-frame → right_value: '%s'", val)
+
+        logger.info(
+            "Full-frame weight extraction: L=%d candidates, R=%d candidates",
+            len(left_weights), len(right_weights),
+        )
 
     # ─────────────────────────────────────────────────────────
     # Field Parsing

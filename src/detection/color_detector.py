@@ -165,6 +165,95 @@ class ColorDetector:
 
         return result
 
+    def detect_whole_frame_state(
+        self, frame: np.ndarray,
+    ) -> Tuple[ValueColorState, ColorDetectionResult, ColorDetectionResult]:
+        """
+        Detect color state by scanning the entire frame (no ROI calibration needed).
+
+        Looks for RED or GREEN text anywhere in the captured frame.
+        Uses higher thresholds than ROI-based detection since the whole frame
+        has more noise from non-value-box areas.
+
+        Args:
+            frame: Full BGR screenshot of the ABRO screen
+
+        Returns:
+            Tuple of (ValueColorState, overall_result, overall_result)
+        """
+        if frame is None or frame.size == 0:
+            empty = ColorDetectionResult()
+            return ValueColorState.UNKNOWN, empty, empty
+
+        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+
+        # Create masks for each color
+        red_mask_1 = cv2.inRange(hsv, self.RED_LOWER_1, self.RED_UPPER_1)
+        red_mask_2 = cv2.inRange(hsv, self.RED_LOWER_2, self.RED_UPPER_2)
+        red_mask = cv2.bitwise_or(red_mask_1, red_mask_2)
+
+        green_mask = cv2.inRange(hsv, self.GREEN_LOWER, self.GREEN_UPPER)
+        blue_mask = cv2.inRange(hsv, self.BLUE_LOWER, self.BLUE_UPPER)
+
+        # Count pixels
+        red_count = int(cv2.countNonZero(red_mask))
+        green_count = int(cv2.countNonZero(green_mask))
+        blue_count = int(cv2.countNonZero(blue_mask))
+        total_pixels = frame.shape[0] * frame.shape[1]
+
+        # We need a minimum amount of blue (the value boxes) to be confident
+        # this is actually the ABRO result screen
+        blue_ratio = blue_count / max(total_pixels, 1)
+
+        non_blue_colored = red_count + green_count
+        result = ColorDetectionResult(
+            red_pixel_count=red_count,
+            green_pixel_count=green_count,
+            total_non_blue_pixels=non_blue_colored,
+        )
+
+        # For whole-frame detection, use higher thresholds:
+        # - Need at least some blue (ABRO has blue value boxes)
+        # - Need meaningful red or green pixel counts
+        min_colored = self.MIN_COLOR_PIXELS * 3  # Higher threshold for whole frame
+        if non_blue_colored < min_colored:
+            result.color = TextColor.UNKNOWN
+            result.confidence = 0.0
+            logger.debug(
+                "Whole-frame: insufficient colored pixels: red=%d, green=%d (min=%d)",
+                red_count, green_count, min_colored,
+            )
+            return ValueColorState.UNKNOWN, result, result
+
+        # Determine dominant color
+        if red_count > green_count:
+            ratio = red_count / non_blue_colored
+            if ratio >= self.MIN_DOMINANCE_RATIO:
+                result.color = TextColor.RED
+                result.confidence = ratio
+                state = ValueColorState.BOTH_RED
+            else:
+                result.color = TextColor.UNKNOWN
+                result.confidence = ratio
+                state = ValueColorState.MIXED
+        else:
+            ratio = green_count / non_blue_colored
+            if ratio >= self.MIN_DOMINANCE_RATIO:
+                result.color = TextColor.GREEN
+                result.confidence = ratio
+                state = ValueColorState.BOTH_GREEN
+            else:
+                result.color = TextColor.UNKNOWN
+                result.confidence = ratio
+                state = ValueColorState.MIXED
+
+        logger.debug(
+            "Whole-frame color: %s (red=%d, green=%d, ratio=%.2f, blue_ratio=%.3f)",
+            state.name, red_count, green_count, result.confidence, blue_ratio,
+        )
+
+        return state, result, result
+
     def detect_value_state(
         self,
         frame: np.ndarray,

@@ -257,3 +257,23 @@ COLOR_DETECT_FIELDS = [
     "left_value_box",
     "right_value_box",
 ]
+
+# ─────────────────────────────────────────────────────────
+# Full-Frame OCR — ABRO Field Regex Patterns
+# Used when no ROI calibration exists. Regex patterns match
+# field labels and values from raw OCR text of the full ABRO screen.
+# ─────────────────────────────────────────────────────────
+ABRO_FIELD_PATTERNS = {
+    # "Rotor No: 222" or "Rotor No: 19915 R 592 SLIP 180"
+    "rotor_no": r"[Rr]otor\s*[Nn]o[.:\s]*(.+)",
+    # "Actual RPM 2306" or "RPM: 2306" or "RPM 2306"
+    "actual_rpm": r"(?:[Aa]ctual\s*)?[Rr][Pp][Mm]\s*[:\s]*(\d+)",
+}
+
+# Patterns for weight values: "+43.8 gm" / "73.5 gm" / "+43.8"
+ABRO_WEIGHT_PATTERN = r"[+\-]?\s*\d+\.?\d*"
+# Patterns for angle values: "5 Deg" / "154 Deg." / "At 5 Deg."
+ABRO_ANGLE_PATTERN = r"[Aa]t\s+(\d+\.?\d*)\s*[Dd]eg"
+
+# Numeric OCR fields (used to decide parsing strategy)
+NUMERIC_OCR_FIELDS = {"actual_rpm", "left_value", "left_angle", "right_value", "right_angle"}

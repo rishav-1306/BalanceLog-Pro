@@ -14,12 +14,11 @@ easyocr>=1.7.0
 pytesseract>=0.3.10
 
 # PyTorch (CPU-only) — required by EasyOCR for model inference.
-# Install these BEFORE easyocr so it doesn't pull the full GPU build:
-#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+# Install CPU-only build to avoid pulling the full GPU version:
+#   pip install torch --index-url https://download.pytorch.org/whl/cpu
 # Then install the rest:
 #   pip install -r requirements.txt
 torch
-torchvision
 
 # Screen Capture
 mss>=9.0.0

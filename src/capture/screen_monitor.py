@@ -123,8 +123,9 @@ class ScreenMonitor(QThread):
         with QMutexLocker(self._mutex):
             self._ssim_threshold = max(0.5, min(1.0, threshold))
 
-    def set_color_rois(self, left_roi: dict, right_roi: dict) -> None:
-        """Set the ROI coordinates for color detection on value boxes."""
+    def set_color_rois(self, left_roi: Optional[dict], right_roi: Optional[dict]) -> None:
+        """Set the ROI coordinates for color detection on value boxes.
+        Pass None for both to enable whole-frame color detection mode."""
         with QMutexLocker(self._mutex):
             self._left_box_roi = left_roi
             self._right_box_roi = right_roi
@@ -172,9 +173,13 @@ class ScreenMonitor(QThread):
         """Stop the monitoring thread gracefully."""
         with QMutexLocker(self._mutex):
             self._running = False
-        self._set_state(MonitoringState.IDLE)
         logger.info("Monitoring stop requested")
-        self.wait(3000)  # Wait up to 3 seconds for thread to finish
+        # Request the QThread event loop to quit, then wait for the run() to return
+        self.requestInterruption()
+        if self.isRunning():
+            self.wait(5000)  # Wait up to 5 seconds for thread to finish
+        self._set_state(MonitoringState.IDLE)
+        logger.info("Monitor thread stopped")
 
     def _set_state(self, state: MonitoringState) -> None:
         """Update monitoring state and emit signal."""
@@ -214,6 +219,7 @@ class ScreenMonitor(QThread):
 
         with mss.mss() as sct:
             while True:
+                # Check stop flag FIRST (before doing any work)
                 with QMutexLocker(self._mutex):
                     if not self._running:
                         break
@@ -232,6 +238,10 @@ class ScreenMonitor(QThread):
                             self._set_state(MonitoringState.WINDOW_LOST)
                             self.window_lost.emit()
                             logger.warning("ABRO window lost")
+                        # Check stop flag before sleeping
+                        with QMutexLocker(self._mutex):
+                            if not self._running:
+                                break
                         self.msleep(interval)
                         continue
 
@@ -244,6 +254,9 @@ class ScreenMonitor(QThread):
                     # Capture the window region
                     frame = self._capture_region(sct, window_rect)
                     if frame is None:
+                        with QMutexLocker(self._mutex):
+                            if not self._running:
+                                break
                         self.msleep(interval)
                         continue
 
@@ -275,15 +288,21 @@ class ScreenMonitor(QThread):
                     # ── Color Detection & State Machine ──
                     color_state = ValueColorState.UNKNOWN
                     if left_roi and right_roi:
+                        # ROI-based detection (calibrated mode)
                         color_state, left_result, right_result = \
                             self._color_detector.detect_value_state(
                                 frame, left_roi, right_roi
                             )
+                    else:
+                        # Whole-frame detection (uncalibrated mode)
+                        # Scans entire captured window for RED/GREEN text
+                        color_state, left_result, right_result = \
+                            self._color_detector.detect_whole_frame_state(frame)
 
-                        # Emit color state change
-                        if color_state != self._last_color_state:
-                            self._last_color_state = color_state
-                            self.color_state_changed.emit(color_state.name)
+                    # Emit color state change
+                    if color_state != self._last_color_state:
+                        self._last_color_state = color_state
+                        self.color_state_changed.emit(color_state.name)
 
                     # Feed frame to state machine
                     event = self._state_machine.process_frame(
@@ -318,10 +337,13 @@ class ScreenMonitor(QThread):
                     self.error_occurred.emit(str(e))
                     self._set_state(MonitoringState.ERROR)
 
+                # Check stop flag before sleeping at end of loop
+                with QMutexLocker(self._mutex):
+                    if not self._running:
+                        break
                 self.msleep(interval)
 
-        self._set_state(MonitoringState.IDLE)
-        logger.info("Monitor thread stopped")
+        logger.info("Monitor thread exiting run()")
 
     def _emit_test_complete(self) -> None:
         """Emit the test_complete signal with test cycle data."""

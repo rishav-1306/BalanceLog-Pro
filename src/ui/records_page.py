@@ -87,7 +87,7 @@ class RecordsPage(QWidget):
         filter_layout.addWidget(QLabel("From:"))
         self._date_from = QDateEdit()
         self._date_from.setCalendarPopup(True)
-        self._date_from.setDate(QDate.currentDate())
+        self._date_from.setDate(QDate.currentDate().addDays(-30))
         self._date_from.setDisplayFormat("yyyy-MM-dd")
         filter_layout.addWidget(self._date_from)
 
