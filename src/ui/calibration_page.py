@@ -9,7 +9,7 @@ from pathlib import Path
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
     QListWidget, QListWidgetItem, QFileDialog, QFrame,
-    QStackedWidget, QMessageBox, QComboBox,
+    QStackedWidget, QMessageBox, QComboBox, QScrollArea,
 )
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QFont, QColor
@@ -23,15 +23,6 @@ from src.ui.widgets import SectionHeader
 class CalibrationPage(QWidget):
     """
     Step-by-step calibration wizard.
-
-    Steps:
-    1. Upload reference screenshot(s) of the ABRO result page
-    2. Select a field and draw ROI rectangle for each
-    3. Review all defined ROIs
-    4. Save calibration
-
-    After calibration, the OCR engine knows exactly where each field
-    is located on the ABRO result screen.
     """
 
     calibration_saved = Signal()
@@ -44,7 +35,14 @@ class CalibrationPage(QWidget):
         self._load_existing_calibration()
 
     def _setup_ui(self) -> None:
-        layout = QVBoxLayout(self)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroll.setStyleSheet(f"QScrollArea {{ border: none; background: {Colors.BG_DARK}; }}")
+
+        container = QWidget()
+        layout = QVBoxLayout(container)
         layout.setContentsMargins(24, 20, 24, 20)
         layout.setSpacing(16)
 
@@ -147,6 +145,12 @@ class CalibrationPage(QWidget):
         content_layout.addWidget(self._roi_selector, 1)
 
         layout.addLayout(content_layout)
+
+        scroll.setWidget(container)
+
+        main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.addWidget(scroll)
 
     def _make_label(self, text: str) -> QLabel:
         lbl = QLabel(text)

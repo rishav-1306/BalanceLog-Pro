@@ -38,7 +38,7 @@ class RecordDetailDialog(QDialog):
         self._record = record
         self._edits = {}
         self.setWindowTitle(f"Record Detail — {record.punching_number}")
-        self.setMinimumSize(900, 650)
+        self.setMinimumSize(700, 450)
         self.setStyleSheet(f"background-color: {Colors.BG_DARK};")
         self._setup_ui()
 

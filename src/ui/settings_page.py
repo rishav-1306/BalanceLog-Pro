@@ -47,6 +47,8 @@ class SettingsPage(QWidget):
         # Scrollable container
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         scroll.setStyleSheet(f"QScrollArea {{ border: none; background: {Colors.BG_DARK}; }}")
 
         container = QWidget()
@@ -74,6 +76,7 @@ class SettingsPage(QWidget):
 
         wg_layout.addWidget(QLabel("Available Windows:"), 1, 0)
         self._combo_windows = QComboBox()
+        self._combo_windows.setMaxVisibleItems(8)
         self._combo_windows.currentTextChanged.connect(self._on_window_selected)
         wg_layout.addWidget(self._combo_windows, 1, 1, 1, 2)
 
@@ -96,20 +99,22 @@ class SettingsPage(QWidget):
 
         og_layout.addWidget(QLabel("OCR Engine:"), 0, 0)
         self._combo_engine = QComboBox()
+        self._combo_engine.setMaxVisibleItems(8)
         self._combo_engine.addItems(["easyocr", "tesseract"])
         og_layout.addWidget(self._combo_engine, 0, 1)
 
         og_layout.addWidget(QLabel("Language:"), 0, 2)
         self._combo_language = QComboBox()
+        self._combo_language.setMaxVisibleItems(8)
         self._combo_language.addItems(["en", "de", "fr", "es", "it", "pt"])
         og_layout.addWidget(self._combo_language, 0, 3)
 
-        og_layout.addWidget(QLabel("Image Scale Factor:"), 0, 2)
+        og_layout.addWidget(QLabel("Image Scale Factor:"), 1, 0)
         self._spin_scale = QDoubleSpinBox()
         self._spin_scale.setRange(1.0, 4.0)
         self._spin_scale.setSingleStep(0.5)
         self._spin_scale.setDecimals(1)
-        og_layout.addWidget(self._spin_scale, 0, 3)
+        og_layout.addWidget(self._spin_scale, 1, 1)
 
         layout.addWidget(ocr_group)
 
@@ -145,6 +150,7 @@ class SettingsPage(QWidget):
 
         ag_layout.addWidget(QLabel("Theme:"))
         self._combo_theme = QComboBox()
+        self._combo_theme.setMaxVisibleItems(8)
         self._combo_theme.addItems(["Dark", "Light"])
         self._combo_theme.currentTextChanged.connect(
             lambda t: self.theme_changed.emit(t.lower())

@@ -47,7 +47,7 @@ class ConfirmationDialog(QDialog):
         self._extraction = extraction
         self._field_inputs = {}
         self.setWindowTitle("Confirm Extracted Values")
-        self.setMinimumSize(800, 600)
+        self.setMinimumSize(650, 420)
         self.setStyleSheet(f"background-color: {Colors.BG_DARK};")
         self._setup_ui()
 

@@ -166,6 +166,8 @@ def get_dark_theme() -> str:
         selection-background-color: {Colors.PRIMARY};
         selection-color: #FFFFFF;
         padding: 4px;
+        max-height: 220px;
+        outline: none;
     }}
 
     /* === Table Views === */

@@ -8,7 +8,7 @@ and quick-action buttons. Industrial dark-themed with status cards.
 from datetime import datetime
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
-    QPushButton, QLabel, QFrame, QSizePolicy, QLineEdit,
+    QPushButton, QLabel, QFrame, QSizePolicy, QLineEdit, QScrollArea,
 )
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QFont, QPixmap
@@ -21,19 +21,6 @@ class DashboardPage(QWidget):
     """
     Industrial dashboard with status cards, action buttons,
     and a live preview thumbnail of the last captured screenshot.
-
-    Status Cards:
-    - Monitoring Status (green/red indicator)
-    - Today's Production count
-    - Today's Screenshots
-    - OCR Accuracy
-    - Database Status
-    - Storage Used
-
-    Action Buttons:
-    - Start / Stop Monitoring
-    - Manual Capture
-    - Quick Export
     """
 
     # Signals for main window to handle
@@ -53,7 +40,14 @@ class DashboardPage(QWidget):
         self._refresh_timer.start(1000)
 
     def _setup_ui(self) -> None:
-        layout = QVBoxLayout(self)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroll.setStyleSheet(f"QScrollArea {{ border: none; background: {Colors.BG_DARK}; }}")
+
+        container = QWidget()
+        layout = QVBoxLayout(container)
         layout.setContentsMargins(24, 20, 24, 20)
         layout.setSpacing(20)
 
@@ -240,6 +234,12 @@ class DashboardPage(QWidget):
         bottom_layout.addWidget(preview_frame, 2)
 
         layout.addLayout(bottom_layout)
+
+        scroll.setWidget(container)
+
+        main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.addWidget(scroll)
 
     # ─────────────────────────────────────────────────────────
     # Update Methods

@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (
     QApplication,
 )
 from PySide6.QtCore import Qt, QTimer, Slot
-from PySide6.QtGui import QFont, QPixmap, QIcon
+from PySide6.QtGui import QFont, QPixmap, QIcon, QGuiApplication
 
 from src.config.config_manager import ConfigManager
 from src.config.constants import (
@@ -46,23 +46,14 @@ from src.ui.logs_page import LogsPage
 from src.ui.record_detail_dialog import RecordDetailDialog
 from src.ui.confirmation_dialog import ConfirmationDialog
 
-logger = get_logger("ui")
+logger = get_logger("ui.main")
 
 
 class MainWindow(QMainWindow):
     """
     Main application window with sidebar navigation and stacked pages.
-
-    Orchestrates:
-    - Screen monitoring (ScreenMonitor thread)
-    - OCR pipeline (capture → detect → OCR → validate → store)
-    - Database operations
-    - Excel export
-    - Report generation
-    - All UI page interactions
     """
 
-    # Navigation page indices
     PAGE_DASHBOARD = 0
     PAGE_RECORDS = 1
     PAGE_SEARCH = 2
@@ -73,29 +64,25 @@ class MainWindow(QMainWindow):
 
     def __init__(self) -> None:
         super().__init__()
-
-        # ── Initialize Services ──
         self._config = ConfigManager()
+        self._db = DatabaseManager()
         self._file_manager = FileManager(self._config.get_base_dir())
+        self._result_detector = ResultDetector()
+        self._ocr = OCREngine()
+        self._validator = ValidationEngine()
+        self._excel = ExcelExporter()
+        self._report_gen = ReportGenerator(self._db)
 
         # Setup logging
         setup_logging(self._file_manager.get_logs_dir())
 
         # Database
-        self._db = DatabaseManager()
         db_path = self._config.get_database_path()
         self._db.set_path(db_path)
         self._db.init_db()
 
-        # Services
+        # Screen monitor thread
         self._monitor = ScreenMonitor()
-        self._detector = ResultDetector()
-        self._ocr_engine = None  # Lazy loaded
-        self._validator = ValidationEngine(
-            self._config.get("ocr.confidence_threshold", 0.75)
-        )
-        self._excel = ExcelExporter()
-        self._report_gen = ReportGenerator(self._db)
 
         # Connect monitor signals
         self._monitor.screen_changed.connect(self._on_screen_changed)
@@ -109,8 +96,17 @@ class MainWindow(QMainWindow):
 
         # ── Setup UI ──
         self.setWindowTitle(f"{APP_NAME} v{APP_VERSION}")
-        self.setMinimumSize(1200, 750)
-        self.resize(1440, 900)
+        self.setMinimumSize(900, 550)
+
+        # Dynamic initial sizing based on monitor available geometry
+        screen = QGuiApplication.primaryScreen()
+        if screen:
+            avail = screen.availableGeometry()
+            target_w = min(1360, max(900, int(avail.width() * 0.85)))
+            target_h = min(850, max(550, int(avail.height() * 0.85)))
+            self.resize(target_w, target_h)
+        else:
+            self.resize(1280, 720)
 
         self._setup_ui()
         self._connect_signals()
@@ -134,7 +130,7 @@ class MainWindow(QMainWindow):
         # ── Sidebar ──
         sidebar = QFrame()
         sidebar.setObjectName("sidebar")
-        sidebar.setFixedWidth(220)
+        sidebar.setFixedWidth(190)
         sidebar.setStyleSheet(get_sidebar_style())
         sidebar_layout = QVBoxLayout(sidebar)
         sidebar_layout.setContentsMargins(12, 20, 12, 20)
